@@ -36,6 +36,20 @@ log_warn() { echo -e "${YELLOW}[installer]${NC} $1"; }
 log_error() { echo -e "${RED}[installer]${NC} $1"; }
 log_step() { echo -e "${BLUE}[installer]${NC} $1"; }
 
+download_file() {
+    local url="$1"
+    local out="$2"
+
+    if command -v curl &> /dev/null; then
+        curl -fsSL "$url" -o "$out"
+    elif command -v wget &> /dev/null; then
+        wget -qO "$out" "$url"
+    else
+        log_error "Neither curl nor wget found. Please install one of them."
+        exit 1
+    fi
+}
+
 # Get version from installed giil (if exists)
 get_installed_version() {
     local script_path="$1"
@@ -194,11 +208,24 @@ main() {
     local install_dir=$(get_install_dir)
     local shell_config=$(get_shell_config)
     local script_path="${install_dir}/${SCRIPT_NAME}"
+    local requested_version="${GIIL_VERSION:-}"
 
     # Check for existing installation
     local installed_version=$(get_installed_version "$script_path")
-    local latest_version=$(get_latest_version)
+    local latest_version=""
+    local download_url=""
+    local fallback_url=""
     local is_upgrade=false
+
+    if [[ -n "$requested_version" ]]; then
+        latest_version="$requested_version"
+        download_url="${RELEASES_URL}/download/v${latest_version}/${SCRIPT_NAME}"
+        fallback_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/v${latest_version}/${SCRIPT_NAME}"
+        log_info "Requested version: ${latest_version}"
+    else
+        latest_version=$(get_latest_version)
+        download_url="${REPO_URL}/${SCRIPT_NAME}"
+    fi
 
     if [[ -n "$installed_version" ]]; then
         is_upgrade=true
@@ -242,14 +269,14 @@ main() {
     # Download the script
     log_step "Downloading giil..."
     local tmp_file=$(mktemp)
-
-    if command -v curl &> /dev/null; then
-        curl -fsSL "${REPO_URL}/giil" -o "$tmp_file"
-    elif command -v wget &> /dev/null; then
-        wget -qO "$tmp_file" "${REPO_URL}/giil"
-    else
-        log_error "Neither curl nor wget found. Please install one of them."
-        exit 1
+    if ! download_file "$download_url" "$tmp_file"; then
+        if [[ -n "$fallback_url" ]]; then
+            log_warn "Primary download failed; trying tag URL..."
+            download_file "$fallback_url" "$tmp_file"
+        else
+            log_error "Failed to download giil"
+            exit 1
+        fi
     fi
 
     # Verify checksum if enabled and version is known

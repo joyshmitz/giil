@@ -93,8 +93,8 @@ check_for_updates() {
 
     # Compare versions
     if [[ -n "$remote_version" && "$remote_version" != "$VERSION" ]]; then
-        # Simple version comparison (works for semver-style versions)
-        if [[ "$remote_version" > "$VERSION" ]]; then
+        # Robust version comparison (semver-aware when sort -V is available)
+        if version_gt "$remote_version" "$VERSION"; then
             echo -e "${YELLOW}[giil]${NC} Update available: ${VERSION} → ${remote_version}" >&2
             echo -e "${YELLOW}[giil]${NC} Run: curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/install.sh | bash" >&2
         fi
@@ -160,7 +160,10 @@ gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
                 cd "$tmp_dir"
                 curl -fsSL "$gum_url" -o gum.tar.gz
                 tar -xzf gum.tar.gz
-                sudo mv gum /usr/local/bin/gum 2>/dev/null || mv gum ~/.local/bin/gum
+                sudo mv gum /usr/local/bin/gum 2>/dev/null || {
+                    mkdir -p ~/.local/bin
+                    mv gum ~/.local/bin/gum
+                }
             ) &>/dev/null && rm -rf "$tmp_dir" && return 0
 
             rm -rf "$tmp_dir"
@@ -168,6 +171,15 @@ gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
     esac
 
     return 1
+}
+
+# Version comparison helper: returns 0 if $1 > $2
+version_gt() {
+    if command -v sort &> /dev/null; then
+        [[ "$(printf '%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" && "$1" != "$2" ]]
+    else
+        [[ "$1" > "$2" ]]
+    fi
 }
 
 check_gum() {
@@ -737,17 +749,36 @@ async function processAndSaveImage(buffer, options) {
     try {
         await sharp(buffer).metadata();
     } catch (sharpError) {
+        const tempJpeg = join(outputDir, `_temp_converted_${Date.now()}.jpg`);
+        let didConvert = false;
+        let tempInput = null;
+
         if (downloadedFilePath && existsSync(downloadedFilePath)) {
-            const tempJpeg = join(outputDir, `_temp_converted_${Date.now()}.jpg`);
-            if (convertHeicWithSystemTools(downloadedFilePath, tempJpeg)) {
-                processableBuffer = readFileSync(tempJpeg);
-                try { unlinkSync(tempJpeg); } catch (e) {}
-                console.error('[giil] Converted HEIC using system tools');
-            } else {
-                throw new Error('Cannot process HEIC image - install libheif-examples (Linux) or use macOS');
-            }
+            didConvert = convertHeicWithSystemTools(downloadedFilePath, tempJpeg);
         } else {
-            throw sharpError;
+            tempInput = join(outputDir, `_temp_input_${Date.now()}.heic`);
+            try {
+                writeFileSync(tempInput, buffer);
+                didConvert = convertHeicWithSystemTools(tempInput, tempJpeg);
+            } catch (e) {
+                // Conversion attempt failed; handled below
+            } finally {
+                if (tempInput && existsSync(tempInput)) {
+                    try { unlinkSync(tempInput); } catch (e) {}
+                }
+            }
+        }
+
+        if (didConvert && existsSync(tempJpeg)) {
+            processableBuffer = readFileSync(tempJpeg);
+            try { unlinkSync(tempJpeg); } catch (e) {}
+            console.error('[giil] Converted HEIC using system tools');
+        } else {
+            if (existsSync(tempJpeg)) {
+                try { unlinkSync(tempJpeg); } catch (e) {}
+            }
+            const errMsg = sharpError && sharpError.message ? sharpError.message : 'unknown error';
+            throw new Error(`Cannot process image (${errMsg}). If this is HEIC, install libheif-examples (Linux) or use macOS`);
         }
     }
 
@@ -982,8 +1013,11 @@ function createImageCaptureHandler(debugMode) {
                                   contentType.includes('heic') ||
                                   contentType.includes('heif') ||
                                   contentType.includes('webp');
+            const urlLower = respUrl.toLowerCase();
+            const hasImageExtension = /\.(jpe?g|png|heic|heif|webp)(\?|#|$)/.test(urlLower);
 
-            if ((isIcloudCdn || (respUrl.includes('.icloud.com') && isImage)) && isPhotoFormat) {
+            if ((isIcloudCdn || (respUrl.includes('.icloud.com') && (isImage || hasImageExtension))) &&
+                (isPhotoFormat || hasImageExtension)) {
                 const buffer = await response.body();
                 if (buffer && buffer.length > capture.size) {
                     capture.buffer = buffer;
