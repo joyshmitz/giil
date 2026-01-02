@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+#
+# giil installer
+# Downloads and installs giil (Get iCloud Image Link) to your system
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/get_icloud_image_link/main/install.sh | bash
+#
+# Options (via environment variables):
+#   DEST=/path/to/dir    Install directory (default: ~/.local/bin)
+#   GIIL_SYSTEM=1        Install to /usr/local/bin (requires sudo)
+#   GIIL_NO_ALIAS=1      Skip adding shell alias
+#
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Configuration
+REPO_URL="https://raw.githubusercontent.com/Dicklesworthstone/get_icloud_image_link/main"
+SCRIPT_NAME="giil"
+
+log_info() { echo -e "${GREEN}[installer]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[installer]${NC} $1"; }
+log_error() { echo -e "${RED}[installer]${NC} $1"; }
+log_step() { echo -e "${BLUE}[installer]${NC} $1"; }
+
+# Determine install directory
+get_install_dir() {
+    if [[ -n "${DEST:-}" ]]; then
+        echo "$DEST"
+    elif [[ -n "${GIIL_SYSTEM:-}" ]]; then
+        echo "/usr/local/bin"
+    else
+        echo "${HOME}/.local/bin"
+    fi
+}
+
+# Detect user's shell config file
+get_shell_config() {
+    local shell_name=$(basename "${SHELL:-/bin/bash}")
+
+    case "$shell_name" in
+        zsh)
+            echo "${HOME}/.zshrc"
+            ;;
+        bash)
+            if [[ -f "${HOME}/.bashrc" ]]; then
+                echo "${HOME}/.bashrc"
+            elif [[ -f "${HOME}/.bash_profile" ]]; then
+                echo "${HOME}/.bash_profile"
+            else
+                echo "${HOME}/.bashrc"
+            fi
+            ;;
+        fish)
+            echo "${HOME}/.config/fish/config.fish"
+            ;;
+        *)
+            echo "${HOME}/.bashrc"
+            ;;
+    esac
+}
+
+# Add directory to PATH in shell config
+add_to_path() {
+    local install_dir="$1"
+    local shell_config="$2"
+    local path_line="export PATH=\"${install_dir}:\$PATH\""
+
+    # Check if already in PATH
+    if [[ ":$PATH:" == *":${install_dir}:"* ]]; then
+        log_info "Directory already in PATH"
+        return 0
+    fi
+
+    # Check if already in config
+    if [[ -f "$shell_config" ]] && grep -qF "$install_dir" "$shell_config" 2>/dev/null; then
+        log_info "PATH entry already in $shell_config"
+        return 0
+    fi
+
+    # Add to config
+    echo "" >> "$shell_config"
+    echo "# Added by giil installer" >> "$shell_config"
+    echo "$path_line" >> "$shell_config"
+
+    log_info "Added ${install_dir} to PATH in ${shell_config}"
+}
+
+# Main installation
+main() {
+    echo ""
+    echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}║          giil - Get iCloud Image Link Installer              ║${NC}"
+    echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    local install_dir=$(get_install_dir)
+    local shell_config=$(get_shell_config)
+    local script_path="${install_dir}/${SCRIPT_NAME}"
+
+    log_step "Install directory: ${install_dir}"
+    log_step "Shell config: ${shell_config}"
+
+    # Create install directory if needed
+    if [[ ! -d "$install_dir" ]]; then
+        log_info "Creating directory: ${install_dir}"
+        mkdir -p "$install_dir"
+    fi
+
+    # Check if we need sudo
+    local use_sudo=""
+    if [[ ! -w "$install_dir" ]]; then
+        if command -v sudo &> /dev/null; then
+            use_sudo="sudo"
+            log_warn "Using sudo for installation to ${install_dir}"
+        else
+            log_error "Cannot write to ${install_dir} and sudo not available"
+            exit 1
+        fi
+    fi
+
+    # Download the script
+    log_step "Downloading giil..."
+    local tmp_file=$(mktemp)
+
+    if command -v curl &> /dev/null; then
+        curl -fsSL "${REPO_URL}/giil" -o "$tmp_file"
+    elif command -v wget &> /dev/null; then
+        wget -qO "$tmp_file" "${REPO_URL}/giil"
+    else
+        log_error "Neither curl nor wget found. Please install one of them."
+        exit 1
+    fi
+
+    # Install the script
+    log_step "Installing to ${script_path}..."
+    $use_sudo mv "$tmp_file" "$script_path"
+    $use_sudo chmod +x "$script_path"
+
+    # Add to PATH if needed
+    if [[ -z "${GIIL_NO_ALIAS:-}" ]]; then
+        add_to_path "$install_dir" "$shell_config"
+    fi
+
+    # Verify installation
+    if [[ -x "$script_path" ]]; then
+        echo ""
+        log_info "✓ Installation complete!"
+        echo ""
+        echo -e "${GREEN}To start using giil:${NC}"
+        echo ""
+
+        if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
+            echo -e "  ${BOLD}1. Reload your shell:${NC}"
+            echo -e "     source ${shell_config}"
+            echo ""
+            echo -e "  ${BOLD}2. Or start a new terminal, then run:${NC}"
+        else
+            echo -e "  ${BOLD}Run:${NC}"
+        fi
+
+        echo -e "     giil \"https://share.icloud.com/photos/YOUR_PHOTO_ID\""
+        echo ""
+        echo -e "${YELLOW}First run will install Playwright + Chromium (~200MB)${NC}"
+        echo ""
+    else
+        log_error "Installation failed - script not executable"
+        exit 1
+    fi
+}
+
+main "$@"
