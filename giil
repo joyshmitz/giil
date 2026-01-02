@@ -89,7 +89,7 @@ check_for_updates() {
     fi
 
     # Update check timestamp
-    echo "$(date +%s)" > "$check_file" 2>/dev/null || true
+    date +%s > "$check_file" 2>/dev/null || true
 
     # Compare versions
     if [[ -n "$remote_version" && "$remote_version" != "$VERSION" ]]; then
@@ -145,14 +145,16 @@ gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
             fi
 
             # Fallback: try downloading from GitHub releases
-            local arch=$(uname -m)
+            local arch
+            arch=$(uname -m)
             case "$arch" in
                 x86_64) arch="amd64" ;;
                 aarch64|arm64) arch="arm64" ;;
                 *) return 1 ;;
             esac
 
-            local tmp_dir=$(mktemp -d)
+            local tmp_dir
+            tmp_dir=$(mktemp -d)
             local gum_version="0.14.5"
             local gum_url="https://github.com/charmbracelet/gum/releases/download/v${gum_version}/gum_${gum_version}_Linux_${arch}.tar.gz"
 
@@ -175,7 +177,7 @@ gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
 
 # Version comparison helper: returns 0 if $1 > $2
 version_gt() {
-    if command -v sort &> /dev/null; then
+    if command -v sort &> /dev/null && printf '%s\n' "$1" "$2" | sort -V >/dev/null 2>&1; then
         [[ "$(printf '%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" && "$1" != "$2" ]]
     else
         [[ "$1" > "$2" ]]
@@ -192,8 +194,13 @@ check_gum() {
     if [[ -t 1 && -z "${CI:-}" && -z "${GIIL_NO_GUM:-}" ]]; then
         # Try to install gum silently
         if try_install_gum; then
-            GUM_AVAILABLE=true
-            return 0
+            if [[ -x "${HOME}/.local/bin/gum" && ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then
+                export PATH="${HOME}/.local/bin:${PATH}"
+            fi
+            if command -v gum &> /dev/null; then
+                GUM_AVAILABLE=true
+                return 0
+            fi
         fi
     fi
 
@@ -532,7 +539,8 @@ install_node_linux() {
 ensure_node() {
     if ! command -v node &> /dev/null; then
         log_warn "Node.js not found. Installing..."
-        local os=$(detect_os)
+        local os
+        os=$(detect_os)
         case "$os" in
             macos) install_node_macos ;;
             linux) install_node_linux ;;
@@ -543,7 +551,8 @@ ensure_node() {
         esac
     fi
 
-    local node_version=$(node --version | sed 's/v//' | cut -d. -f1)
+    local node_version
+    node_version=$(node --version | sed 's/v//' | cut -d. -f1)
     if [[ "$node_version" -lt 18 ]]; then
         log_warn "Node.js v18+ recommended. Current: $(node --version)"
     fi
@@ -600,24 +609,84 @@ ensure_playwright() {
   "private": true,
   "type": "module",
   "dependencies": {
-    "playwright": "^1.40.0",
-    "sharp": "^0.33.0",
-    "exifr": "^7.1.3"
+    "playwright": "1.40.0",
+    "sharp": "0.33.0",
+    "exifr": "7.1.3"
   }
 }
 PACKAGE_EOF
 
         cd "$GIIL_HOME"
         log_step "Installing npm packages..."
-        npm install --silent --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
+        npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
+            npm install --no-fund --no-audit --include=optional
+
+        # Verify sharp runtime is usable; install platform-specific prebuilds if needed.
+        if ! node -e "require('sharp')" >/dev/null 2>&1; then
+            log_warn "Sharp runtime missing; attempting platform-specific install..."
+            local os
+            os=$(detect_os)
+            local arch
+            arch=$(uname -m)
+            local sharp_pkg=""
+            local vips_pkg=""
+            local sharp_pkg_version=""
+            local vips_pkg_version=""
+
+            case "$os" in
+                linux)
+                    case "$arch" in
+                        x86_64|amd64)
+                            sharp_pkg="@img/sharp-linux-x64"
+                            vips_pkg="@img/sharp-libvips-linux-x64"
+                            ;;
+                        aarch64|arm64)
+                            sharp_pkg="@img/sharp-linux-arm64"
+                            vips_pkg="@img/sharp-libvips-linux-arm64"
+                            ;;
+                    esac
+                    ;;
+                macos)
+                    case "$arch" in
+                        x86_64|amd64)
+                            sharp_pkg="@img/sharp-darwin-x64"
+                            vips_pkg="@img/sharp-libvips-darwin-x64"
+                            ;;
+                        arm64)
+                            sharp_pkg="@img/sharp-darwin-arm64"
+                            vips_pkg="@img/sharp-libvips-darwin-arm64"
+                            ;;
+                    esac
+                    ;;
+            esac
+
+            if [[ -n "$sharp_pkg" && -n "$vips_pkg" ]]; then
+                sharp_pkg_version=$(node -p "require('./node_modules/sharp/package.json').optionalDependencies['${sharp_pkg}'] || ''" 2>/dev/null || echo "")
+                vips_pkg_version=$(node -p "require('./node_modules/sharp/package.json').optionalDependencies['${vips_pkg}'] || ''" 2>/dev/null || echo "")
+
+                if [[ -n "$sharp_pkg_version" && -n "$vips_pkg_version" ]]; then
+                    npm install --no-fund --no-audit --force "${sharp_pkg}@${sharp_pkg_version}" "${vips_pkg}@${vips_pkg_version}"
+                else
+                    npm install --no-fund --no-audit --force "$sharp_pkg" "$vips_pkg"
+                fi
+            else
+                log_warn "No prebuilt sharp packages available for ${os}/${arch}"
+            fi
+
+            if ! node -e "require('sharp')" >/dev/null 2>&1; then
+                log_error "Sharp failed to install. Try reinstalling dependencies or set GIIL_HOME to a writable path."
+                exit 1
+            fi
+        fi
 
         log_step "Installing Chromium browser..."
         export PLAYWRIGHT_BROWSERS_PATH
-        npx playwright install chromium 2>&1 | grep -v "^$" || {
-            local os=$(detect_os)
+        npx playwright install chromium 2>&1 | sed '/^$/d' || {
+            local os
+            os=$(detect_os)
             if [[ "$os" == "linux" ]]; then
                 log_warn "Trying with system dependencies (may require sudo)..."
-                npx playwright install --with-deps chromium 2>&1 | grep -v "^$" || {
+                npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' || {
                     log_error "Failed to install Chromium. Try manually:"
                     log_error "  npx playwright install --with-deps chromium"
                     exit 1
@@ -648,8 +717,8 @@ import { chromium } from 'playwright';
 import sharp from 'sharp';
 import exifr from 'exifr';
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
-import { execSync } from 'child_process';
+import { join, basename } from 'path';
+import { execFileSync } from 'child_process';
 
 // Parse arguments
 const args = process.argv.slice(2);
@@ -706,10 +775,10 @@ function convertHeicWithSystemTools(inputPath, outputPath) {
     const platform = process.platform;
     try {
         if (platform === 'darwin') {
-            execSync(`sips -s format jpeg "${inputPath}" --out "${outputPath}"`, { stdio: 'ignore' });
+            execFileSync('sips', ['-s', 'format', 'jpeg', inputPath, '--out', outputPath], { stdio: 'ignore' });
             return true;
         } else if (platform === 'linux') {
-            execSync(`heif-convert "${inputPath}" "${outputPath}"`, { stdio: 'ignore' });
+            execFileSync('heif-convert', [inputPath, outputPath], { stdio: 'ignore' });
             return true;
         }
     } catch (e) {
@@ -900,7 +969,8 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
 
                 if (download) {
                     const suggestedName = download.suggestedFilename() || 'icloud_download';
-                    downloadedFilePath = join(outputDir, `_temp_${Date.now()}_${suggestedName}`);
+                    const safeName = basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_');
+                    downloadedFilePath = join(outputDir, `_temp_${Date.now()}_${safeName}`);
                     await download.saveAs(downloadedFilePath);
                     finalBuffer = readFileSync(downloadedFilePath);
                     captureMethod = 'download';
@@ -1238,7 +1308,7 @@ async function extractImage() {
             } catch (e) {}
         }
 
-        process.exit(1);
+        throw error;
     } finally {
         page.off('response', responseHandler);
         await browser.close();
@@ -1350,6 +1420,10 @@ parse_args() {
     fi
 
     # Create output directory if needed
+    if [[ -e "$OUTPUT_DIR" && ! -d "$OUTPUT_DIR" ]]; then
+        log_error "--output path exists and is not a directory: $OUTPUT_DIR"
+        exit 1
+    fi
     if [[ ! -d "$OUTPUT_DIR" ]]; then
         mkdir -p "$OUTPUT_DIR"
     fi
@@ -1394,7 +1468,8 @@ main() {
     ensure_node
     ensure_playwright
 
-    local script_path=$(create_extractor_script)
+    local script_path
+    script_path=$(create_extractor_script)
 
     if [[ "$ALL_MODE" == "true" ]]; then
         log_step "Extracting album from iCloud..."

@@ -41,12 +41,12 @@ download_file() {
     local out="$2"
 
     if command -v curl &> /dev/null; then
-        curl -fsSL "$url" -o "$out"
+        curl -fsSL "$url" -o "$out" || return 1
     elif command -v wget &> /dev/null; then
-        wget -qO "$out" "$url"
+        wget -qO "$out" "$url" || return 1
     else
         log_error "Neither curl nor wget found. Please install one of them."
-        exit 1
+        return 127
     fi
 }
 
@@ -93,9 +93,9 @@ verify_checksum() {
     fi
 
     if [[ -z "$expected_checksum" ]]; then
-        log_warn "Could not fetch checksum for v${version} (release may not exist yet)"
-        log_warn "Skipping verification. Run installer again after release is published."
-        return 0
+        log_error "Could not fetch checksum for v${version}."
+        log_error "Ensure the release exists and includes giil.sha256."
+        return 1
     fi
 
     local actual_checksum
@@ -133,7 +133,8 @@ get_install_dir() {
 
 # Detect user's shell config file
 get_shell_config() {
-    local shell_name=$(basename "${SHELL:-/bin/bash}")
+    local shell_name
+    shell_name=$(basename "${SHELL:-/bin/bash}")
 
     case "$shell_name" in
         zsh)
@@ -161,7 +162,8 @@ get_shell_config() {
 add_to_path() {
     local install_dir="$1"
     local shell_config="$2"
-    local shell_name=$(basename "${SHELL:-/bin/bash}")
+    local shell_name
+    shell_name=$(basename "${SHELL:-/bin/bash}")
 
     # Check if already in PATH
     if [[ ":$PATH:" == *":${install_dir}:"* ]]; then
@@ -176,7 +178,8 @@ add_to_path() {
     fi
 
     # Ensure config directory exists (important for fish)
-    local config_dir=$(dirname "$shell_config")
+    local config_dir
+    config_dir=$(dirname "$shell_config")
     if [[ ! -d "$config_dir" ]]; then
         mkdir -p "$config_dir"
     fi
@@ -190,9 +193,11 @@ add_to_path() {
     fi
 
     # Add to config
-    echo "" >> "$shell_config"
-    echo "# Added by giil installer" >> "$shell_config"
-    echo "$path_line" >> "$shell_config"
+    {
+        echo ""
+        echo "# Added by giil installer"
+        echo "$path_line"
+    } >> "$shell_config"
 
     log_info "Added ${install_dir} to PATH in ${shell_config}"
 }
@@ -205,16 +210,20 @@ main() {
     echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    local install_dir=$(get_install_dir)
-    local shell_config=$(get_shell_config)
+    local install_dir
+    local shell_config
+    install_dir=$(get_install_dir)
+    shell_config=$(get_shell_config)
     local script_path="${install_dir}/${SCRIPT_NAME}"
     local requested_version="${GIIL_VERSION:-}"
 
     # Check for existing installation
-    local installed_version=$(get_installed_version "$script_path")
+    local installed_version
+    installed_version=$(get_installed_version "$script_path")
     local latest_version=""
     local download_url=""
     local fallback_url=""
+    local verify_enabled="false"
     local is_upgrade=false
 
     if [[ -n "$requested_version" ]]; then
@@ -224,7 +233,13 @@ main() {
         log_info "Requested version: ${latest_version}"
     else
         latest_version=$(get_latest_version)
-        download_url="${REPO_URL}/${SCRIPT_NAME}"
+        if [[ -n "${GIIL_VERIFY:-}" && -n "$latest_version" ]]; then
+            download_url="${RELEASES_URL}/download/v${latest_version}/${SCRIPT_NAME}"
+            fallback_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/v${latest_version}/${SCRIPT_NAME}"
+            verify_enabled="true"
+        else
+            download_url="${REPO_URL}/${SCRIPT_NAME}"
+        fi
     fi
 
     if [[ -n "$installed_version" ]]; then
@@ -268,7 +283,8 @@ main() {
 
     # Download the script
     log_step "Downloading giil..."
-    local tmp_file=$(mktemp)
+    local tmp_file
+    tmp_file=$(mktemp)
     if ! download_file "$download_url" "$tmp_file"; then
         if [[ -n "$fallback_url" ]]; then
             log_warn "Primary download failed; trying tag URL..."
@@ -280,11 +296,18 @@ main() {
     fi
 
     # Verify checksum if enabled and version is known
-    if [[ -n "$latest_version" ]]; then
+    if [[ -n "$latest_version" && -n "${GIIL_VERIFY:-}" ]]; then
         if ! verify_checksum "$tmp_file" "$latest_version"; then
             rm -f "$tmp_file"
             exit 1
         fi
+        verify_enabled="true"
+    fi
+
+    if [[ "$verify_enabled" != "true" && -n "${GIIL_VERIFY:-}" ]]; then
+        log_error "Checksum verification requested but release checksums unavailable."
+        log_error "Publish a release for ${latest_version} or set GIIL_VERSION to a released tag."
+        exit 1
     fi
 
     # Install the script
