@@ -23,9 +23,9 @@
 #   --json           Output JSON metadata instead of plain path
 #   --all            Download all photos from shared album
 #   --output DIR     Output directory (default: current)
-#   --optimize       Apply MozJPEG optimization (opt-in compression)
+#   --preserve       Keep original bytes (skip MozJPEG compression)
 #   --convert FMT    Convert to format: jpeg, png, webp
-#   --quality N      JPEG/WebP quality (default: 85, with --optimize/--convert)
+#   --quality N      JPEG/WebP quality (default: 85)
 #   --update         Force update Playwright/dependencies
 #   --debug          Save debug artifacts on failure
 #   --timeout N      Page load timeout in seconds (default: 60)
@@ -389,6 +389,7 @@ FORCE_UPDATE=false
 DEBUG_MODE=false
 TIMEOUT=60
 OPTIMIZE_MODE=false
+PRESERVE_MODE=false
 CONVERT_FORMAT=""
 PRINT_URL=false
 VERBOSE=false
@@ -472,9 +473,9 @@ Options:
   --json           Output JSON with path, datetime, sourceUrl, captureMethod
   --all            Download ALL photos from a shared album (iterates thumbnails)
   --output DIR     Output directory (default: current directory)
-  --optimize       Apply MozJPEG optimization (opt-in compression)
+  --preserve       Keep original bytes (skip MozJPEG compression)
   --convert FMT    Convert to format: jpeg, png, webp
-  --quality N      JPEG/WebP quality 1-100 (default: 85, with --optimize/--convert)
+  --quality N      JPEG/WebP quality 1-100 (default: 85)
   --update         Force update Playwright and dependencies
   --debug          Enable debug mode with extra logging and artifacts
   --verbose        Show detailed progress (implies --debug)
@@ -486,8 +487,8 @@ Options:
   --help           Show this help message
 
 v3.0 Behavior Change:
-  Original image bytes are now preserved by default (no recompression).
-  Use --optimize for MozJPEG compression or --convert for format conversion.
+  MozJPEG compression is now applied by default for optimal file size.
+  Use --preserve to keep original bytes without recompression.
 
 Supported URL formats:
   https://share.icloud.com/photos/<id>
@@ -913,6 +914,7 @@ const verboseMode = args[10] === 'true';
 const traceMode = args[11] === 'true';
 const printUrlMode = args[12] === 'true';
 const debugDir = args[13] || '';
+const preserveMode = args[14] === 'true';  // v3.0+: skip MozJPEG compression, keep original bytes
 
 // Verbose logging helper
 function verbose(msg) {
@@ -920,7 +922,7 @@ function verbose(msg) {
 }
 
 if (!url) {
-    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert> <verbose> <trace> <printUrl> <debugDir>');
+    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert> <verbose> <trace> <printUrl> <debugDir> <preserve>');
     process.exit(ExitCodes.USAGE_ERROR);
 }
 
@@ -2361,7 +2363,12 @@ parse_args() {
                 shift 2
                 ;;
             --optimize)
-                OPTIMIZE_MODE=true
+                # Deprecated in v3.0 - compression is now default
+                log_warn "--optimize is deprecated (compression is now default)"
+                shift
+                ;;
+            --preserve)
+                PRESERVE_MODE=true
                 shift
                 ;;
             --convert)
@@ -2614,9 +2621,10 @@ main() {
             log_debug "Trace: $TRACE_MODE"
             log_debug "Print URL: $PRINT_URL"
             log_debug "Debug dir: ${DEBUG_DIR:-cwd}"
+            log_debug "Preserve: $PRESERVE_MODE"
 
             cd "$GIIL_HOME"
-            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR"
+            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE"
             ;;
     esac
 }
