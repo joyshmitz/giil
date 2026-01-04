@@ -87,7 +87,7 @@ check_for_updates() {
     [[ -z "${GIIL_CHECK_UPDATES:-}" ]] && return 0
 
     # Only check once per day (cache result)
-    # Note: GIIL_HOME is already set at script load time (line 353)
+    # Note: GIIL_HOME is set in globals before main() is called
     local check_file="${GIIL_HOME}/.last_update_check"
     local one_day=86400
 
@@ -1458,19 +1458,19 @@ function getUniqueFilename(outputDir, dateStr, index = null, ext = 'jpg') {
 }
 
 // Process a single image buffer and save/output it
-// v3 behavior: Preserve original bytes by default. Only process if --optimize or --convert specified.
+// Default: MozJPEG compression for optimal size/quality. Use --preserve to keep original bytes.
 async function processAndSaveImage(buffer, options) {
     const {
         outputDir, quality, base64Output, jsonOutput,
         captureMethod, sourceUrl, downloadedFilePath, index,
-        optimize, convert  // v3 flags
+        preserve, convert  // preserve=true skips compression
     } = options;
 
     // Try to get EXIF datetime
     let captureDate = await getExifDateTime(buffer);
 
-    // Determine if we need to process the image
-    const needsProcessing = optimize || convert;
+    // Default: process with MozJPEG. Skip if --preserve (unless converting)
+    const needsProcessing = !preserve || convert;
 
     // Handle HEIC/HEIF conversion if Sharp can't read the original format
     let processableBuffer = buffer;
@@ -1908,7 +1908,7 @@ async function extractImage() {
     if (traceMode) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
         const traceDir = debugDir || outputDir || '.';
-        tracePath = path.join(traceDir, `giil_trace_${timestamp}.zip`);
+        tracePath = join(traceDir, `giil_trace_${timestamp}.zip`);
         verbose(`Playwright tracing enabled, will save to: ${tracePath}`);
         await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     }
