@@ -1551,7 +1551,8 @@ async function processAndSaveImage(buffer, options) {
     } else {
         // v3 default: Preserve original bytes
         processedBuffer = processableBuffer;
-        outputExt = metadata.format || 'jpg';
+        // Normalize 'jpeg' to 'jpg' for consistent extension naming
+        outputExt = metadata.format === 'jpeg' ? 'jpg' : (metadata.format || 'jpg');
         console.error('[giil] Preserving original bytes (use --optimize for MozJPEG compression)');
     }
 
@@ -2132,10 +2133,64 @@ async function extractImage() {
             // ========================================
             // SINGLE MODE: Download one photo
             // ========================================
-            const result = await captureSinglePhoto(page, context, {
-                outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
-            }, imageCapture);
-            results.push(result);
+
+            // Platform-specific handling for Google Drive
+            if (currentPlatform === 'gdrive') {
+                console.error('[giil] Google Drive detected, using dedicated capture...');
+
+                // Check for auth issues first
+                const authCheck = await checkGoogleDriveAuth(page);
+                if (authCheck.needsAuth) {
+                    const error = new Error(authCheck.reason);
+                    error.exitCode = ExitCodes.AUTH_REQUIRED;
+                    error.code = 'AUTH_REQUIRED';
+                    throw error;
+                }
+                if (authCheck.reason && authCheck.reason.includes('FILE_NOT_FOUND')) {
+                    const error = new Error(authCheck.reason);
+                    error.exitCode = ExitCodes.NOT_FOUND;
+                    error.code = 'NOT_FOUND';
+                    throw error;
+                }
+
+                // Extract file ID and use dedicated capture
+                const fileId = extractGoogleDriveFileId(url);
+                if (!fileId) {
+                    console.error('[giil] Could not extract Google Drive file ID, using generic capture');
+                    const result = await captureSinglePhoto(page, context, {
+                        outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
+                    }, imageCapture);
+                    results.push(result);
+                } else {
+                    const gdriveResult = await captureGoogleDrive(page, fileId, debugMode);
+                    if (gdriveResult && gdriveResult.bytes) {
+                        // Process and save the captured image
+                        const result = await processAndSaveImage(gdriveResult.bytes, {
+                            outputDir, quality, base64Output, jsonOutput,
+                            captureMethod: gdriveResult.method,
+                            sourceUrl: gdriveResult.sourceUrl,
+                            downloadedFilePath: null,
+                            index: undefined,
+                            optimize: optimizeMode,
+                            convert: convertFormat
+                        });
+                        results.push(result);
+                    } else {
+                        // Fallback to generic capture if Google Drive-specific failed
+                        console.error('[giil] Google Drive capture failed, trying generic strategies...');
+                        const result = await captureSinglePhoto(page, context, {
+                            outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
+                        }, imageCapture);
+                        results.push(result);
+                    }
+                }
+            } else {
+                // Generic capture for iCloud, Google Photos, Dropbox, etc.
+                const result = await captureSinglePhoto(page, context, {
+                    outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
+                }, imageCapture);
+                results.push(result);
+            }
         }
 
     } catch (error) {
