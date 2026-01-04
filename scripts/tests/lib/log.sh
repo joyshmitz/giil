@@ -152,8 +152,6 @@ log_suite_summary() {
     local duration_ms="${5:-0}"
 
     local total=$((passed + failed + skipped))
-    local suite_status="pass"
-    [[ "$failed" -gt 0 ]] && suite_status="fail"
 
     local extra="\"suite\":\"$(_json_escape "$suite_name")\",\"passed\":$passed,\"failed\":$failed,\"skipped\":$skipped,\"total\":$total,\"duration_ms\":$duration_ms"
 

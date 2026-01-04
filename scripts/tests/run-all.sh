@@ -18,10 +18,10 @@ start_time=$SECONDS
 log_section "Unit Tests"
 if node --test "$SCRIPT_DIR"/*.test.mjs; then
     log_pass "All unit tests passed"
-    ((total_passed++))
+    ((total_passed+=1))
 else
     log_fail "Some unit tests failed"
-    ((total_failed++))
+    ((total_failed+=1))
 fi
 
 # Run E2E tests if they exist
@@ -32,10 +32,10 @@ if compgen -G "$SCRIPT_DIR/e2e/*.test.sh" > /dev/null 2>&1; then
         log_info "Running: $test_name"
         if bash "$test"; then
             log_pass "$test_name"
-            ((total_passed++))
+            ((total_passed+=1))
         else
             log_fail "$test_name"
-            ((total_failed++))
+            ((total_failed+=1))
         fi
     done
 else
