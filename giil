@@ -243,13 +243,13 @@ print_banner() {
             --padding "0 2" \
             --margin "1 0" \
             --bold \
-            "🍎 giil v${VERSION}" \
-            "Get iCloud Image Link" >&2
+            "📷 giil v${VERSION}" \
+            "Get Image from Internet Link" >&2
     else
-        echo -e "\n${BOLD}${MAGENTA}╔════════════════════════════════════╗${NC}" >&2
-        echo -e "${BOLD}${MAGENTA}║${NC}  ${BOLD}🍎 giil v${VERSION}${NC}                    ${BOLD}${MAGENTA}║${NC}" >&2
-        echo -e "${BOLD}${MAGENTA}║${NC}  ${DIM}Get iCloud Image Link${NC}             ${BOLD}${MAGENTA}║${NC}" >&2
-        echo -e "${BOLD}${MAGENTA}╚════════════════════════════════════╝${NC}\n" >&2
+        echo -e "\n${BOLD}${MAGENTA}╔══════════════════════════════════════════╗${NC}" >&2
+        echo -e "${BOLD}${MAGENTA}║${NC}  ${BOLD}📷 giil v${VERSION}${NC}                          ${BOLD}${MAGENTA}║${NC}" >&2
+        echo -e "${BOLD}${MAGENTA}║${NC}  ${DIM}Get Image from Internet Link${NC}             ${BOLD}${MAGENTA}║${NC}" >&2
+        echo -e "${BOLD}${MAGENTA}╚══════════════════════════════════════════╝${NC}\n" >&2
     fi
 }
 
@@ -266,7 +266,8 @@ show_quickstart() {
             --padding "1 2" \
             --margin "1" \
             --bold \
-            "🍎 giil v${VERSION} — Get iCloud Image Link"
+            "📷 giil v${VERSION}" \
+            "Get Image from Internet Link"
 
         echo ""
 
@@ -274,50 +275,47 @@ show_quickstart() {
         echo "  giil <URL> [OPTIONS]"
         echo ""
 
+        gum style --foreground 214 --bold "SUPPORTED PLATFORMS"
+        gum style --foreground 82 "  ✓ iCloud Photos    " --faint "share.icloud.com/photos/..."
+        gum style --foreground 82 "  ✓ Dropbox          " --faint "dropbox.com/s/..."
+        gum style --foreground 82 "  ✓ Google Photos    " --faint "photos.app.goo.gl/..."
+        gum style --foreground 82 "  ✓ Google Drive     " --faint "drive.google.com/file/d/..."
+        echo ""
+
         gum style --foreground 214 --bold "QUICK EXAMPLES"
-        gum style --foreground 39 "  # Download single photo → stdout: filepath"
+        gum style --foreground 39 "  # Download from iCloud"
         echo "  giil \"https://share.icloud.com/photos/ABC123\""
         echo ""
-        gum style --foreground 39 "  # Download with JSON metadata → stdout: JSON"
-        echo "  giil \"https://share.icloud.com/photos/ABC123\" --json"
+        gum style --foreground 39 "  # Download from Dropbox"
+        echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\""
+        echo ""
+        gum style --foreground 39 "  # Download with JSON metadata"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
         echo ""
         gum style --foreground 39 "  # Download album (all photos)"
         echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ./album"
-        echo ""
-        gum style --foreground 39 "  # Get base64 for embedding"
-        echo "  giil \"https://share.icloud.com/photos/ABC123\" --base64"
         echo ""
 
         gum style --foreground 214 --bold "OPTIONS"
         gum style --faint "  --output DIR     Save to directory (default: .)"
         gum style --faint "  --quality N      JPEG quality 1-100 (default: 85)"
-        gum style --faint "  --json           Output: {path,datetime,sourceUrl,method,size,width,height}"
-        gum style --faint "  --base64         Output: base64-encoded JPEG"
-        gum style --faint "  --all            Download ALL photos from shared album"
-        gum style --faint "  --timeout N      Page load timeout seconds (default: 60)"
-        gum style --faint "  --debug          Save debug artifacts on failure"
+        gum style --faint "  --preserve       Keep original bytes (skip compression)"
+        gum style --faint "  --convert FMT    Convert to: jpeg, png, webp"
+        gum style --faint "  --json           Output JSON metadata"
+        gum style --faint "  --base64         Output base64-encoded image"
+        gum style --faint "  --all            Download ALL photos from album"
+        gum style --faint "  --timeout N      Timeout in seconds (default: 60)"
+        gum style --faint "  --quiet          Suppress progress messages"
         gum style --faint "  --help           Full documentation"
         echo ""
 
-        gum style --foreground 214 --bold "OUTPUT FORMAT (for agents)"
+        gum style --foreground 214 --bold "OUTPUT FORMAT"
         gum style --foreground 82 "  stdout:"
-        gum style --faint "    Default:  /path/to/icloud_YYYYMMDD_HHMMSS.jpg"
-        gum style --faint "    --json:   {\"path\":\"...\",\"datetime\":\"ISO8601\",\"method\":\"network|download\",...}"
-        gum style --faint "    --base64: /9j/4AAQSkZJRg... (raw base64, no wrapper)"
+        gum style --faint "    Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg"
+        gum style --faint "    --json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --base64: /9j/4AAQSkZJRg... (raw base64)"
         gum style --foreground 208 "  stderr:"
         gum style --faint "    Progress messages, errors (parseable: [giil] prefix)"
-        echo ""
-
-        gum style --foreground 214 --bold "CAPTURE METHODS (in priority order)"
-        gum style --faint "  1. download        Click Download button (original file)"
-        gum style --faint "  2. network         Intercept CDN response (full-res)"
-        gum style --faint "  3. element-screenshot   Screenshot <img> element"
-        gum style --faint "  4. viewport-screenshot  Screenshot viewport (fallback)"
-        echo ""
-
-        gum style --foreground 214 --bold "URL FORMATS (both work)"
-        gum style --faint "  https://share.icloud.com/photos/<ID>"
-        gum style --faint "  https://www.icloud.com/photos/#<ID>"
         echo ""
 
         gum style --foreground 245 --italic "First run installs Playwright+Chromium (~200MB, cached in ~/.cache/giil)"
@@ -326,52 +324,50 @@ show_quickstart() {
         # Fallback ANSI-styled output
         echo ""
         echo -e "${BOLD}${MAGENTA}╭──────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "${BOLD}${MAGENTA}│${NC}  🍎 ${BOLD}giil v${VERSION}${NC} — Get iCloud Image Link                        ${BOLD}${MAGENTA}│${NC}"
+        echo -e "${BOLD}${MAGENTA}│${NC}  📷 ${BOLD}giil v${VERSION}${NC} — Get Image from Internet Link               ${BOLD}${MAGENTA}│${NC}"
         echo -e "${BOLD}${MAGENTA}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo ""
         echo -e "${BOLD}${YELLOW}SYNOPSIS${NC}"
         echo "  giil <URL> [OPTIONS]"
         echo ""
+        echo -e "${BOLD}${YELLOW}SUPPORTED PLATFORMS${NC}"
+        echo -e "  ${GREEN}✓${NC} iCloud Photos    ${DIM}share.icloud.com/photos/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Dropbox          ${DIM}dropbox.com/s/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Google Photos    ${DIM}photos.app.goo.gl/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Google Drive     ${DIM}drive.google.com/file/d/...${NC}"
+        echo ""
         echo -e "${BOLD}${YELLOW}QUICK EXAMPLES${NC}"
-        echo -e "  ${CYAN}# Download single photo → stdout: filepath${NC}"
+        echo -e "  ${CYAN}# Download from iCloud${NC}"
         echo "  giil \"https://share.icloud.com/photos/ABC123\""
         echo ""
-        echo -e "  ${CYAN}# Download with JSON metadata → stdout: JSON${NC}"
-        echo "  giil \"https://share.icloud.com/photos/ABC123\" --json"
+        echo -e "  ${CYAN}# Download from Dropbox${NC}"
+        echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\""
+        echo ""
+        echo -e "  ${CYAN}# Download with JSON metadata${NC}"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
         echo ""
         echo -e "  ${CYAN}# Download album (all photos)${NC}"
         echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ./album"
         echo ""
-        echo -e "  ${CYAN}# Get base64 for embedding${NC}"
-        echo "  giil \"https://share.icloud.com/photos/ABC123\" --base64"
-        echo ""
         echo -e "${BOLD}${YELLOW}OPTIONS${NC}"
         echo -e "  ${DIM}--output DIR     Save to directory (default: .)${NC}"
         echo -e "  ${DIM}--quality N      JPEG quality 1-100 (default: 85)${NC}"
-        echo -e "  ${DIM}--json           Output: {path,datetime,sourceUrl,method,size,width,height}${NC}"
-        echo -e "  ${DIM}--base64         Output: base64-encoded JPEG${NC}"
-        echo -e "  ${DIM}--all            Download ALL photos from shared album${NC}"
-        echo -e "  ${DIM}--timeout N      Page load timeout seconds (default: 60)${NC}"
-        echo -e "  ${DIM}--debug          Save debug artifacts on failure${NC}"
+        echo -e "  ${DIM}--preserve       Keep original bytes (skip compression)${NC}"
+        echo -e "  ${DIM}--convert FMT    Convert to: jpeg, png, webp${NC}"
+        echo -e "  ${DIM}--json           Output JSON metadata${NC}"
+        echo -e "  ${DIM}--base64         Output base64-encoded image${NC}"
+        echo -e "  ${DIM}--all            Download ALL photos from album${NC}"
+        echo -e "  ${DIM}--timeout N      Timeout in seconds (default: 60)${NC}"
+        echo -e "  ${DIM}--quiet          Suppress progress messages${NC}"
         echo -e "  ${DIM}--help           Full documentation${NC}"
         echo ""
-        echo -e "${BOLD}${YELLOW}OUTPUT FORMAT (for agents)${NC}"
+        echo -e "${BOLD}${YELLOW}OUTPUT FORMAT${NC}"
         echo -e "  ${GREEN}stdout:${NC}"
-        echo -e "    ${DIM}Default:  /path/to/icloud_YYYYMMDD_HHMMSS.jpg${NC}"
-        echo -e "    ${DIM}--json:   {\"path\":\"...\",\"datetime\":\"ISO8601\",\"method\":\"network|download\",...}${NC}"
-        echo -e "    ${DIM}--base64: /9j/4AAQSkZJRg... (raw base64, no wrapper)${NC}"
+        echo -e "    ${DIM}Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg${NC}"
+        echo -e "    ${DIM}--json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}${NC}"
+        echo -e "    ${DIM}--base64: /9j/4AAQSkZJRg... (raw base64)${NC}"
         echo -e "  ${YELLOW}stderr:${NC}"
         echo -e "    ${DIM}Progress messages, errors (parseable: [giil] prefix)${NC}"
-        echo ""
-        echo -e "${BOLD}${YELLOW}CAPTURE METHODS${NC} ${DIM}(in priority order)${NC}"
-        echo -e "  ${DIM}1. download           Click Download button (original file)${NC}"
-        echo -e "  ${DIM}2. network            Intercept CDN response (full-res)${NC}"
-        echo -e "  ${DIM}3. element-screenshot Screenshot <img> element${NC}"
-        echo -e "  ${DIM}4. viewport-screenshot Screenshot viewport (fallback)${NC}"
-        echo ""
-        echo -e "${BOLD}${YELLOW}URL FORMATS${NC} ${DIM}(both work)${NC}"
-        echo -e "  ${DIM}https://share.icloud.com/photos/<ID>${NC}"
-        echo -e "  ${DIM}https://www.icloud.com/photos/#<ID>${NC}"
         echo ""
         echo -e "${DIM}${ITALIC}First run installs Playwright+Chromium (~200MB, cached in ~/.cache/giil)${NC}"
     fi
@@ -394,6 +390,7 @@ PRESERVE_MODE=false
 CONVERT_FORMAT=""
 PRINT_URL=false
 VERBOSE=false
+QUIET_MODE=false
 TRACE_MODE=false
 DEBUG_DIR=""
 URL=""
@@ -408,6 +405,7 @@ PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$GIIL_HOME/ms-playwright}"
 # -----------------------------------------------------------------------------
 
 log_info() {
+    [[ "$QUIET_MODE" == "true" ]] && return
     if [[ "$GUM_AVAILABLE" == "true" ]]; then
         gum log --level info "$1" >&2
     else
@@ -432,6 +430,7 @@ log_error() {
 }
 
 log_step() {
+    [[ "$QUIET_MODE" == "true" ]] && return
     if [[ "$GUM_AVAILABLE" == "true" ]]; then
         gum style --foreground 39 "→ $1" >&2
     else
@@ -450,6 +449,7 @@ log_debug() {
 }
 
 log_success() {
+    [[ "$QUIET_MODE" == "true" ]] && return
     if [[ "$GUM_AVAILABLE" == "true" ]]; then
         gum style --foreground 82 "✓ $1" >&2
     else
@@ -462,65 +462,202 @@ log_success() {
 # -----------------------------------------------------------------------------
 
 show_help() {
-    cat << 'EOF'
-giil - Get iCloud Image Link (Hybrid Edition v3.0)
-Downloads images from iCloud photo shares with maximum reliability
+    if [[ "$GUM_AVAILABLE" == "true" ]]; then
+        # Beautiful gum-styled help
+        gum style \
+            --border double \
+            --border-foreground 212 \
+            --padding "1 2" \
+            --margin "1" \
+            --bold \
+            "📷 giil v${VERSION}" \
+            "Get Image from Internet Link"
 
-Usage:
-  giil <icloud-photo-url> [options]
+        echo ""
 
-Options:
-  --base64         Output image as base64 text instead of saving file
-  --json           Output JSON with path, datetime, sourceUrl, captureMethod
-  --all            Download ALL photos from a shared album (iterates thumbnails)
-  --output DIR     Output directory (default: current directory)
-  --preserve       Keep original bytes (skip MozJPEG compression)
-  --convert FMT    Convert to format: jpeg, png, webp
-  --quality N      JPEG/WebP quality 1-100 (default: 85)
-  --update         Force update Playwright and dependencies
-  --debug          Enable debug mode with extra logging and artifacts
-  --verbose        Show detailed progress (implies --debug)
-  --trace          Enable Playwright tracing for deep debugging
-  --print-url      Output resolved direct URL instead of downloading
-  --debug-dir DIR  Directory for debug artifacts (default: current)
-  --timeout N      Page load timeout in seconds (default: 60)
-  --version        Show version information
-  --help           Show this help message
+        gum style --foreground 214 --bold "DESCRIPTION"
+        gum style --padding "0 2" "Downloads images from cloud photo sharing services with maximum reliability.
+Uses Playwright for browser automation with a 4-tier capture strategy."
+        echo ""
 
-v3.0 Behavior Change:
-  MozJPEG compression is now applied by default for optimal file size.
-  Use --preserve to keep original bytes without recompression.
+        gum style --foreground 214 --bold "USAGE"
+        echo "  giil <URL> [OPTIONS]"
+        echo ""
 
-Supported URL formats:
-  https://share.icloud.com/photos/<id>
-  https://www.icloud.com/photos/#<id>
+        gum style --foreground 214 --bold "SUPPORTED PLATFORMS"
+        gum style --foreground 82 "  ✓ iCloud Photos"
+        gum style --foreground 245 "      share.icloud.com/photos/..."
+        gum style --foreground 245 "      www.icloud.com/photos/#..."
+        gum style --foreground 82 "  ✓ Dropbox"
+        gum style --foreground 245 "      dropbox.com/s/..."
+        gum style --foreground 245 "      dropbox.com/scl/fi/..."
+        gum style --foreground 82 "  ✓ Google Photos"
+        gum style --foreground 245 "      photos.app.goo.gl/..."
+        gum style --foreground 245 "      photos.google.com/share/..."
+        gum style --foreground 82 "  ✓ Google Drive"
+        gum style --foreground 245 "      drive.google.com/file/d/..."
+        gum style --foreground 245 "      drive.google.com/open?id=..."
+        echo ""
 
-Capture Strategy (in order of preference):
-  1. Click Download button (highest quality, original file)
-  2. Intercept CDN response (full-resolution image)
-  3. Screenshot image element
-  4. Screenshot viewport (last resort)
+        gum style --foreground 214 --bold "OPTIONS"
+        gum style --foreground 39 "  Output Format"
+        gum style --faint "    --json           Output JSON metadata"
+        gum style --faint "    --base64         Output base64-encoded image"
+        gum style --faint "    --print-url      Output direct URL instead of downloading"
+        echo ""
+        gum style --foreground 39 "  Image Processing"
+        gum style --faint "    --output DIR     Save to directory (default: current)"
+        gum style --faint "    --quality N      JPEG/WebP quality 1-100 (default: 85)"
+        gum style --faint "    --preserve       Keep original bytes (skip compression)"
+        gum style --faint "    --convert FMT    Convert to: jpeg, png, webp"
+        echo ""
+        gum style --foreground 39 "  Album Mode"
+        gum style --faint "    --all            Download ALL photos from shared album"
+        echo ""
+        gum style --foreground 39 "  Behavior"
+        gum style --faint "    --timeout N      Page load timeout in seconds (default: 60)"
+        gum style --faint "    --quiet          Suppress progress messages"
+        gum style --faint "    --update         Force update Playwright and dependencies"
+        echo ""
+        gum style --foreground 39 "  Debugging"
+        gum style --faint "    --debug          Save debug artifacts on failure"
+        gum style --faint "    --verbose        Show detailed progress"
+        gum style --faint "    --trace          Enable Playwright tracing"
+        gum style --faint "    --debug-dir DIR  Directory for debug artifacts"
+        echo ""
+        gum style --foreground 39 "  Information"
+        gum style --faint "    --version        Show version"
+        gum style --faint "    --help           Show this help"
+        echo ""
 
-Output Modes:
-  Default:   Prints file path to stdout
-  --json:    {"path": "...", "datetime": "...", "sourceUrl": "...", "method": "..."}
-  --base64:  Prints base64-encoded JPEG to stdout
-  --all:     Downloads all images, outputs one path/JSON per line
+        gum style --foreground 214 --bold "CAPTURE STRATEGY"
+        gum style --padding "0 2" "Images are captured using a 4-tier strategy (in priority order):"
+        gum style --foreground 82 "  1. Download button" --faint "— Click native download (original file)"
+        gum style --foreground 82 "  2. Network CDN" --faint "    — Intercept CDN response (full-res)"
+        gum style --foreground 82 "  3. Element shot" --faint "  — Screenshot <img> element"
+        gum style --foreground 82 "  4. Viewport shot" --faint " — Screenshot visible area (fallback)"
+        echo ""
 
-Examples:
-  # Download single photo
-  giil "https://share.icloud.com/photos/02cD9okNHvVd-uuDnPCH3ZEEA"
+        gum style --foreground 214 --bold "OUTPUT MODES"
+        gum style --foreground 82 "  stdout:"
+        gum style --faint "    Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg"
+        gum style --faint "    --json:   {\"ok\":true,\"path\":\"...\",\"method\":\"...\",\"size\":...}"
+        gum style --faint "    --base64: /9j/4AAQSkZJRg... (raw base64)"
+        gum style --foreground 208 "  stderr:"
+        gum style --faint "    Progress messages with [giil] prefix"
+        echo ""
 
-  # Download to specific directory with lower quality
-  giil "https://www.icloud.com/photos/#02cD9okNHvVd" --output ~/Downloads --quality 70
+        gum style --foreground 214 --bold "EXAMPLES"
+        gum style --foreground 39 "  # Download from iCloud"
+        echo "  giil \"https://share.icloud.com/photos/ABC123\""
+        echo ""
+        gum style --foreground 39 "  # Download from Dropbox with lower quality"
+        echo "  giil \"https://dropbox.com/s/abc123/photo.jpg\" --quality 70"
+        echo ""
+        gum style --foreground 39 "  # Get JSON output from Google Photos"
+        echo "  giil \"https://photos.app.goo.gl/ABC123\" --json"
+        echo ""
+        gum style --foreground 39 "  # Download entire iCloud album"
+        echo "  giil \"https://share.icloud.com/photos/ABC123\" --all --output ~/album"
+        echo ""
+        gum style --foreground 39 "  # Get base64 for embedding"
+        echo "  giil \"https://drive.google.com/file/d/ABC123/view\" --base64"
+        echo ""
 
-  # Get JSON output for scripting
-  giil "https://share.icloud.com/photos/xxx" --json
+        gum style --foreground 214 --bold "EXIT CODES"
+        gum style --faint "  0   Success"
+        gum style --faint "  2   Usage error (bad arguments)"
+        gum style --faint "  10  Network error"
+        gum style --faint "  11  Auth required (private content)"
+        gum style --faint "  12  Not found (expired/invalid link)"
+        gum style --faint "  13  Unsupported platform"
+        echo ""
 
-  # Download entire shared album
-  giil "https://share.icloud.com/photos/xxx" --all --output ~/album
+        gum style --foreground 245 --italic "First run installs Playwright+Chromium (~200MB, cached in ~/.cache/giil)"
+    else
+        # Fallback plain-text help
+        cat << EOF
+giil v${VERSION} — Get Image from Internet Link
 
+Downloads images from cloud photo sharing services with maximum reliability.
+
+USAGE
+  giil <URL> [OPTIONS]
+
+SUPPORTED PLATFORMS
+  ✓ iCloud Photos    share.icloud.com/photos/... | www.icloud.com/photos/#...
+  ✓ Dropbox          dropbox.com/s/... | dropbox.com/scl/fi/...
+  ✓ Google Photos    photos.app.goo.gl/... | photos.google.com/share/...
+  ✓ Google Drive     drive.google.com/file/d/... | drive.google.com/open?id=...
+
+OPTIONS
+  Output Format:
+    --json           Output JSON metadata
+    --base64         Output base64-encoded image
+    --print-url      Output direct URL instead of downloading
+
+  Image Processing:
+    --output DIR     Save to directory (default: current)
+    --quality N      JPEG/WebP quality 1-100 (default: 85)
+    --preserve       Keep original bytes (skip compression)
+    --convert FMT    Convert to: jpeg, png, webp
+
+  Album Mode:
+    --all            Download ALL photos from shared album
+
+  Behavior:
+    --timeout N      Page load timeout in seconds (default: 60)
+    --quiet          Suppress progress messages
+    --update         Force update Playwright and dependencies
+
+  Debugging:
+    --debug          Save debug artifacts on failure
+    --verbose        Show detailed progress
+    --trace          Enable Playwright tracing
+    --debug-dir DIR  Directory for debug artifacts
+
+  Information:
+    --version        Show version
+    --help           Show this help
+
+CAPTURE STRATEGY (in priority order)
+  1. Download button — Click native download (original file)
+  2. Network CDN     — Intercept CDN response (full-res)
+  3. Element shot    — Screenshot <img> element
+  4. Viewport shot   — Screenshot visible area (fallback)
+
+OUTPUT MODES
+  stdout:
+    Default:  /path/to/image_YYYYMMDD_HHMMSS.jpg
+    --json:   {"ok":true,"path":"...","method":"...","size":...}
+    --base64: /9j/4AAQSkZJRg... (raw base64)
+  stderr:
+    Progress messages with [giil] prefix
+
+EXAMPLES
+  # Download from iCloud
+  giil "https://share.icloud.com/photos/ABC123"
+
+  # Download from Dropbox with lower quality
+  giil "https://dropbox.com/s/abc123/photo.jpg" --quality 70
+
+  # Get JSON output from Google Photos
+  giil "https://photos.app.goo.gl/ABC123" --json
+
+  # Download entire iCloud album
+  giil "https://share.icloud.com/photos/ABC123" --all --output ~/album
+
+EXIT CODES
+  0   Success
+  2   Usage error
+  10  Network error
+  11  Auth required
+  12  Not found
+  13  Unsupported platform
+
+First run installs Playwright+Chromium (~200MB, cached in ~/.cache/giil)
 EOF
+    fi
     exit 0
 }
 
@@ -723,9 +860,15 @@ ensure_playwright() {
 PACKAGE_EOF
 
         cd "$GIIL_HOME"
-        log_step "Installing npm packages..."
-        npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
-            npm install --no-fund --no-audit --include=optional >&2
+        if [[ "$GUM_AVAILABLE" == "true" ]]; then
+            gum spin --spinner dot --title "Installing npm packages..." -- \
+                npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
+                npm install --no-fund --no-audit --include=optional >&2
+        else
+            log_step "Installing npm packages..."
+            npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
+                npm install --no-fund --no-audit --include=optional >&2
+        fi
 
         # Verify sharp runtime is usable; install platform-specific prebuilds if needed.
         if ! node -e "require('sharp')" >/dev/null 2>&1; then
@@ -785,24 +928,36 @@ PACKAGE_EOF
             fi
         fi
 
-        log_step "Installing Chromium browser..."
         export PLAYWRIGHT_BROWSERS_PATH
-        npx playwright install chromium 2>&1 | sed '/^$/d' >&2 || {
+        local chromium_installed=false
+        if [[ "$GUM_AVAILABLE" == "true" ]]; then
+            if gum spin --spinner dot --title "Installing Chromium browser (~150MB)..." -- \
+                npx playwright install chromium 2>/dev/null; then
+                chromium_installed=true
+            fi
+        else
+            log_step "Installing Chromium browser..."
+            if npx playwright install chromium 2>&1 | sed '/^$/d' >&2; then
+                chromium_installed=true
+            fi
+        fi
+
+        if [[ "$chromium_installed" != "true" ]]; then
             local os
             os=$(detect_os)
             if [[ "$os" == "linux" ]]; then
                 log_warn "Trying with system dependencies (may require sudo)..."
-                npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' >&2 || {
+                if ! npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' >&2; then
                     log_error "Failed to install Chromium. Try manually:"
                     log_error "  npx playwright install --with-deps chromium"
                     exit "$EXIT_DEPENDENCY_ERROR"
-                }
+                fi
             else
                 log_error "Failed to install Chromium. Try manually:"
                 log_error "  npx playwright install chromium"
                 exit "$EXIT_DEPENDENCY_ERROR"
             fi
-        }
+        fi
 
         touch "$lock_file"
         log_info "Setup complete!"
@@ -916,14 +1071,20 @@ const traceMode = args[11] === 'true';
 const printUrlMode = args[12] === 'true';
 const debugDir = args[13] || '';
 const preserveMode = args[14] === 'true';  // v3.0+: skip MozJPEG compression, keep original bytes
+const quietMode = args[15] === 'true';     // Suppress progress messages
 
-// Verbose logging helper
+// Verbose logging helper (only logs if not in quiet mode)
 function verbose(msg) {
-    if (verboseMode) console.error(`[giil] ${msg}`);
+    if (verboseMode && !quietMode) console.error(`[giil] ${msg}`);
+}
+
+// Info logging helper (respects quiet mode)
+function logInfo(msg) {
+    if (!quietMode) console.error(`[giil] ${msg}`);
 }
 
 if (!url) {
-    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert> <verbose> <trace> <printUrl> <debugDir> <preserve>');
+    console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert> <verbose> <trace> <printUrl> <debugDir> <preserve> <quiet>');
     process.exit(ExitCodes.USAGE_ERROR);
 }
 
@@ -1011,7 +1172,7 @@ async function downloadGooglePhotosFullRes(cdnUrl) {
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
-        console.error(`[giil] Downloaded Google Photos full-res: ${(buffer.length / 1024).toFixed(1)} KB`);
+        logInfo(`Downloaded Google Photos full-res: ${(buffer.length / 1024).toFixed(1)} KB`);
         return { buffer, url: fullResUrl };
     } catch (e) {
         console.error(`[giil] Google Photos download error: ${e.message}`);
@@ -1188,7 +1349,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
                 const path = await dl.path();
                 if (path) {
                     const buf = readFileSync(path);
-                    console.error('[giil] GDrive download: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                    logInfo('GDrive download: ' + (buf.length / 1024).toFixed(1) + ' KB');
                     return { bytes: buf, method: 'download-button', tier: 1, sourceUrl: getGoogleDriveViewerUrl(fileId) };
                 }
             }
@@ -1203,7 +1364,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
         if (res.ok && (res.headers.get('content-type') || '').startsWith('image/')) {
             const buf = Buffer.from(await res.arrayBuffer());
             if (!validateGoogleDriveResponse(buf).isError) {
-                console.error('[giil] GDrive direct: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                logInfo('GDrive direct: ' + (buf.length / 1024).toFixed(1) + ' KB');
                 return { bytes: buf, method: 'direct-url', tier: 2, sourceUrl: url };
             }
         }
@@ -1217,7 +1378,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
         if (res.ok) {
             const buf = Buffer.from(await res.arrayBuffer());
             if (validateMagicBytes(buf).isImage) {
-                console.error('[giil] GDrive thumbnail: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                logInfo('GDrive thumbnail: ' + (buf.length / 1024).toFixed(1) + ' KB');
                 return { bytes: buf, method: 'thumbnail', tier: 3, sourceUrl: url, isPreview: true };
             }
         }
@@ -1232,7 +1393,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
                 const box = await el.boundingBox();
                 if (box && box.width > 100 && box.height > 100) {
                     const buf = await el.screenshot({ type: 'png' });
-                    console.error('[giil] GDrive element screenshot: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                    verbose('GDrive element screenshot: ' + (buf.length / 1024).toFixed(1) + ' KB');
                     return { bytes: buf, method: 'element-screenshot', tier: 4, sourceUrl: getGoogleDriveViewerUrl(fileId) };
                 }
             }
@@ -1513,7 +1674,7 @@ async function processAndSaveImage(buffer, options) {
         if (didConvert && existsSync(tempJpeg)) {
             processableBuffer = readFileSync(tempJpeg);
             try { unlinkSync(tempJpeg); } catch (e) {}
-            console.error('[giil] Converted HEIC using system tools');
+            verbose('Converted HEIC using system tools');
             // Re-read metadata from converted buffer
             metadata = await sharp(processableBuffer).metadata();
             originalFormat = 'heic';  // Remember original was HEIC
@@ -1526,7 +1687,7 @@ async function processAndSaveImage(buffer, options) {
         }
     }
 
-    console.error(`[giil] Image: ${metadata.width}x${metadata.height}, ${metadata.format || originalFormat || 'unknown'}`);
+    logInfo(`Image: ${metadata.width}x${metadata.height}, ${metadata.format || originalFormat || 'unknown'}`);
 
     // Use current time if no EXIF date
     if (!captureDate) {
@@ -1549,15 +1710,15 @@ async function processAndSaveImage(buffer, options) {
                 chromaSubsampling: '4:2:0'
             });
             outputExt = 'jpg';
-            console.error(`[giil] MozJPEG compression (quality ${quality})`);
+            verbose(`MozJPEG compression (quality ${quality})`);
         } else if (convert === 'png') {
             pipeline = pipeline.png({ compressionLevel: 9 });
             outputExt = 'png';
-            console.error('[giil] PNG conversion');
+            verbose('PNG conversion');
         } else if (convert === 'webp') {
             pipeline = pipeline.webp({ quality: quality });
             outputExt = 'webp';
-            console.error(`[giil] WebP conversion (quality ${quality})`);
+            verbose(`WebP conversion (quality ${quality})`);
         }
 
         processedBuffer = await pipeline.toBuffer();
@@ -1566,7 +1727,7 @@ async function processAndSaveImage(buffer, options) {
         processedBuffer = processableBuffer;
         // Normalize 'jpeg' to 'jpg' for consistent extension naming
         outputExt = metadata.format === 'jpeg' ? 'jpg' : (metadata.format || 'jpg');
-        console.error('[giil] Preserving original bytes');
+        verbose('Preserving original bytes');
     }
 
     // Generate filename with datetime (v3: use outputExt for format-aware filenames)
@@ -1592,7 +1753,7 @@ async function processAndSaveImage(buffer, options) {
         } else {
             console.log(processedBuffer.toString('base64'));
         }
-        console.error(`[giil] Output: base64 (${(processedBuffer.length / 1024).toFixed(1)} KB)`);
+        logInfo(`✓ Output: base64 (${(processedBuffer.length / 1024).toFixed(1)} KB)`);
     } else {
         writeFileSync(outputPath, processedBuffer);
 
@@ -1612,7 +1773,7 @@ async function processAndSaveImage(buffer, options) {
         } else {
             console.log(outputPath);
         }
-        console.error(`[giil] Saved: ${outputPath} (${(processedBuffer.length / 1024).toFixed(1)} KB, ${captureMethod})`);
+        logInfo(`✓ Saved: ${outputPath} (${(processedBuffer.length / 1024).toFixed(1)} KB, ${captureMethod})`);
     }
 
     return { outputPath, captureDate, metadata };
@@ -1644,7 +1805,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 1: Click Download button
     // ========================================
     if (!options.skipDownloadButton) {
-        console.error('[giil] Trying download button...');
+        verbose('Trying download button...');
         const downloadSelectors = [
             'button[aria-label="Download"]',
             'button[title="Download"]',
@@ -1679,7 +1840,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
                     finalBuffer = readFileSync(downloadedFilePath);
                     captureMethod = 'download';
                     sourceUrl = download.url();
-                    console.error(`[giil] Downloaded: ${suggestedName}`);
+                    logInfo(`Downloaded: ${suggestedName}`);
                     break;
                 }
             } catch (e) {
@@ -1697,26 +1858,26 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     if (!finalBuffer && bestImageBuffer && bestImageSize > 10000) {
         // For Google Photos, try to download full-resolution using =s0 modifier
         if (bestImageUrl && bestImageUrl.includes('googleusercontent.com/')) {
-            console.error('[giil] Google Photos detected, trying full-resolution download...');
+            verbose('Google Photos detected, trying full-resolution download...');
             const fullResResult = await downloadGooglePhotosFullRes(bestImageUrl);
             if (fullResResult && fullResResult.buffer) {
                 finalBuffer = fullResResult.buffer;
                 captureMethod = 'url-extraction';
                 sourceUrl = fullResResult.url;
-                console.error(`[giil] Google Photos full-res: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
+                logInfo(`Google Photos full-res: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
             } else {
                 // Fall back to captured preview
                 finalBuffer = bestImageBuffer;
                 captureMethod = 'network';
                 sourceUrl = bestImageUrl;
-                console.error(`[giil] Using Google Photos preview: ${(bestImageSize / 1024).toFixed(1)} KB`);
+                logInfo(`Using Google Photos preview: ${(bestImageSize / 1024).toFixed(1)} KB`);
             }
         } else {
             // Standard CDN capture (iCloud, etc.)
             finalBuffer = bestImageBuffer;
             captureMethod = 'network';
             sourceUrl = bestImageUrl;
-            console.error(`[giil] Captured from CDN: ${(bestImageSize / 1024).toFixed(1)} KB`);
+            logInfo(`Captured from CDN: ${(bestImageSize / 1024).toFixed(1)} KB`);
         }
     }
 
@@ -1724,7 +1885,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 3: Screenshot image element
     // ========================================
     if (!finalBuffer) {
-        console.error('[giil] Trying element screenshot...');
+        verbose('Trying element screenshot...');
         const imgSelectors = [
             // iCloud selectors
             'img[src*="cvws.icloud-content"]',
@@ -1756,7 +1917,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
                     if (box && box.width > 100 && box.height > 100) {
                         finalBuffer = await imgElement.screenshot({ type: 'png' });
                         captureMethod = 'element-screenshot';
-                        console.error(`[giil] Screenshot: ${selector}`);
+                        verbose(`Screenshot: ${selector}`);
                         break;
                     }
                 }
@@ -1768,7 +1929,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 4: Viewport screenshot (last resort)
     // ========================================
     if (!finalBuffer) {
-        console.error('[giil] Taking viewport screenshot (fallback)...');
+        verbose('Taking viewport screenshot (fallback)...');
         finalBuffer = await page.screenshot({ type: 'png', fullPage: false });
         captureMethod = 'viewport-screenshot';
     }
@@ -1790,7 +1951,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     }
 
     // Process and save
-    console.error('[giil] Processing image...');
+    verbose('Processing image...');
     return await processAndSaveImage(finalBuffer, {
         outputDir,
         quality,
@@ -1932,7 +2093,7 @@ async function extractImage() {
 
     try {
         // Navigate to page
-        console.error(`[giil] Loading: ${url}`);
+        logInfo(`Loading: ${url}`);
         await page.goto(url, {
             waitUntil: 'domcontentloaded',
             timeout: timeoutMs
@@ -1979,7 +2140,7 @@ async function extractImage() {
             // ========================================
             // ALL MODE: Download every photo in album
             // ========================================
-            console.error('[giil] Album mode: finding all photos...');
+            logInfo('Album mode: finding all photos...');
 
             // Find thumbnail elements (platform-aware selectors)
             const thumbnailSelectors = [
@@ -2011,7 +2172,7 @@ async function extractImage() {
                 const found = await page.$$(sel);
                 if (found.length > thumbnails.length) {
                     thumbnails = found;
-                    console.error(`[giil] Found ${found.length} items with: ${sel}`);
+                    verbose(`Found ${found.length} items with: ${sel}`);
                 }
             }
 
@@ -2019,7 +2180,7 @@ async function extractImage() {
                 // For Google Photos: try using collected CDN URLs as fallback
                 if (currentPlatform === 'gphotos' && imageCapture.gphotoUrls.size > 0) {
                     const gphotoBaseUrls = Array.from(imageCapture.gphotoUrls);
-                    console.error(`[giil] Using ${gphotoBaseUrls.length} collected Google Photos URLs...`);
+                    logInfo(`Using ${gphotoBaseUrls.length} collected Google Photos URLs...`);
 
                     for (let i = 0; i < gphotoBaseUrls.length; i++) {
                         try {
@@ -2028,7 +2189,7 @@ async function extractImage() {
                                 await sleep(ALBUM_DELAY_MS);
                             }
 
-                            console.error(`\n[giil] Photo ${i + 1}/${gphotoBaseUrls.length}...`);
+                            logInfo(`\nPhoto ${i + 1}/${gphotoBaseUrls.length}...`);
                             const fullResResult = await downloadGooglePhotosFullRes(gphotoBaseUrls[i]);
 
                             if (fullResResult && fullResResult.buffer) {
@@ -2050,14 +2211,14 @@ async function extractImage() {
                     }
                 } else {
                     // Fallback: treat as single photo
-                    console.error('[giil] No album thumbnails found, treating as single photo');
+                    verbose('No album thumbnails found, treating as single photo');
                     const result = await captureSinglePhoto(page, context, {
                         outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                     }, imageCapture);
                     results.push(result);
                 }
             } else {
-                console.error(`[giil] Processing ${thumbnails.length} photos...`);
+                logInfo(`Processing ${thumbnails.length} photos...`);
 
                 for (let i = 0; i < thumbnails.length; i++) {
                     try {
@@ -2140,7 +2301,7 @@ async function extractImage() {
                 }
             }
 
-            console.error(`\n[giil] Album complete: ${results.length} photos saved`);
+            logInfo(`\n✓ Album complete: ${results.length} photos saved`);
 
         } else {
             // ========================================
@@ -2149,7 +2310,7 @@ async function extractImage() {
 
             // Platform-specific handling for Google Drive
             if (currentPlatform === 'gdrive') {
-                console.error('[giil] Google Drive detected, using dedicated capture...');
+                verbose('Google Drive detected, using dedicated capture...');
 
                 // Check for auth issues first
                 const authCheck = await checkGoogleDriveAuth(page);
@@ -2169,7 +2330,7 @@ async function extractImage() {
                 // Extract file ID and use dedicated capture
                 const fileId = extractGoogleDriveFileId(url);
                 if (!fileId) {
-                    console.error('[giil] Could not extract Google Drive file ID, using generic capture');
+                    verbose('Could not extract Google Drive file ID, using generic capture');
                     const result = await captureSinglePhoto(page, context, {
                         outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                     }, imageCapture);
@@ -2190,7 +2351,7 @@ async function extractImage() {
                         results.push(result);
                     } else {
                         // Fallback to generic capture if Google Drive-specific failed
-                        console.error('[giil] Google Drive capture failed, trying generic strategies...');
+                        verbose('Google Drive capture failed, trying generic strategies...');
                         const result = await captureSinglePhoto(page, context, {
                             outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                         }, imageCapture);
@@ -2345,6 +2506,10 @@ parse_args() {
             --verbose)
                 VERBOSE=true
                 DEBUG_MODE=true  # --verbose implies --debug
+                shift
+                ;;
+            --quiet|-q)
+                QUIET_MODE=true
                 shift
                 ;;
             --trace)
@@ -2619,13 +2784,14 @@ main() {
             log_debug "Optimize: $OPTIMIZE_MODE"
             log_debug "Convert: ${CONVERT_FORMAT:-none}"
             log_debug "Verbose: $VERBOSE"
+            log_debug "Quiet: $QUIET_MODE"
             log_debug "Trace: $TRACE_MODE"
             log_debug "Print URL: $PRINT_URL"
             log_debug "Debug dir: ${DEBUG_DIR:-cwd}"
             log_debug "Preserve: $PRESERVE_MODE"
 
             cd "$GIIL_HOME"
-            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE"
+            node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE"
             ;;
     esac
 }

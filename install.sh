@@ -206,7 +206,7 @@ add_to_path() {
 main() {
     echo ""
     echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}║          giil - Get iCloud Image Link Installer              ║${NC}"
+    echo -e "${BOLD}║${NC}  📷 ${BOLD}giil${NC} — Get Image from Internet Link                      ${BOLD}║${NC}"
     echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -331,6 +331,12 @@ main() {
         echo ""
         log_info "✓ Installation complete!"
         echo ""
+        echo -e "${BOLD}Supported Platforms:${NC}"
+        echo -e "  ${GREEN}✓${NC} iCloud Photos    ${BLUE}share.icloud.com/photos/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Dropbox          ${BLUE}dropbox.com/s/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Google Photos    ${BLUE}photos.app.goo.gl/...${NC}"
+        echo -e "  ${GREEN}✓${NC} Google Drive     ${BLUE}drive.google.com/file/d/...${NC}"
+        echo ""
         echo -e "${GREEN}To start using giil:${NC}"
         echo ""
 
@@ -344,6 +350,7 @@ main() {
         fi
 
         echo -e "     giil \"https://share.icloud.com/photos/YOUR_PHOTO_ID\""
+        echo -e "     giil \"https://dropbox.com/s/abc123/photo.jpg\""
         echo ""
         echo -e "${YELLOW}First run will install Playwright + Chromium (~200MB)${NC}"
         echo ""
