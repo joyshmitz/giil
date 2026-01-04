@@ -42,11 +42,16 @@ test_album() {
     local json_output="$album_output/output.jsonl"
 
     # Run giil with --all
+    # Note: stdout = JSON output (one line per image), stderr = logs (to console)
     local start=$SECONDS
-    if ! "$E2E_GIIL_BIN" "$url" --all --json --output "$album_output" > "$json_output" 2>&1; then
+    local stderr_log="$album_output/stderr.log"
+    if ! "$E2E_GIIL_BIN" "$url" --all --json --output "$album_output" > "$json_output" 2>"$stderr_log"; then
         log_fail "giil --all command failed for $platform"
-        if [[ -f "$json_output" ]]; then
-            log_info "Output: $(head -20 "$json_output")"
+        if [[ -f "$stderr_log" ]]; then
+            log_info "stderr: $(tail -20 "$stderr_log")"
+        fi
+        if [[ -f "$json_output" && -s "$json_output" ]]; then
+            log_info "stdout: $(head -5 "$json_output")"
         fi
         return 1
     fi
@@ -75,7 +80,9 @@ test_album() {
     local invalid_count=0
     for file in "$album_output"/*; do
         [[ -f "$file" ]] || continue
+        # Skip non-image files (JSON output, logs)
         [[ "$file" == *.json* ]] && continue
+        [[ "$file" == *.log ]] && continue
 
         if e2e_assert_valid_image "$file" "Valid image: $(basename "$file")"; then
             ((valid_count+=1))
