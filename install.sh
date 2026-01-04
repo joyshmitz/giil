@@ -290,10 +290,12 @@ main() {
             log_warn "Primary download failed; trying tag URL..."
             if ! download_file "$fallback_url" "$tmp_file"; then
                 log_error "Failed to download giil from both primary and fallback URLs"
+                rm -f "$tmp_file"
                 exit 1
             fi
         else
             log_error "Failed to download giil"
+            rm -f "$tmp_file"
             exit 1
         fi
     fi
@@ -310,6 +312,7 @@ main() {
     if [[ "$verify_enabled" != "true" && -n "${GIIL_VERIFY:-}" ]]; then
         log_error "Checksum verification requested but release checksums unavailable."
         log_error "Publish a release for ${latest_version} or set GIIL_VERSION to a released tag."
+        rm -f "$tmp_file"
         exit 1
     fi
 
