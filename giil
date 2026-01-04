@@ -724,7 +724,7 @@ PACKAGE_EOF
         cd "$GIIL_HOME"
         log_step "Installing npm packages..."
         npm install --silent --no-fund --no-audit --include=optional 2>/dev/null || \
-            npm install --no-fund --no-audit --include=optional
+            npm install --no-fund --no-audit --include=optional >&2
 
         # Verify sharp runtime is usable; install platform-specific prebuilds if needed.
         if ! node -e "require('sharp')" >/dev/null 2>&1; then
@@ -770,9 +770,9 @@ PACKAGE_EOF
                 vips_pkg_version=$(node -p "require('./node_modules/sharp/package.json').optionalDependencies['${vips_pkg}'] || ''" 2>/dev/null || echo "")
 
                 if [[ -n "$sharp_pkg_version" && -n "$vips_pkg_version" ]]; then
-                    npm install --no-fund --no-audit --force "${sharp_pkg}@${sharp_pkg_version}" "${vips_pkg}@${vips_pkg_version}"
+                    npm install --no-fund --no-audit --force "${sharp_pkg}@${sharp_pkg_version}" "${vips_pkg}@${vips_pkg_version}" >&2
                 else
-                    npm install --no-fund --no-audit --force "$sharp_pkg" "$vips_pkg"
+                    npm install --no-fund --no-audit --force "$sharp_pkg" "$vips_pkg" >&2
                 fi
             else
                 log_warn "No prebuilt sharp packages available for ${os}/${arch}"
@@ -786,12 +786,12 @@ PACKAGE_EOF
 
         log_step "Installing Chromium browser..."
         export PLAYWRIGHT_BROWSERS_PATH
-        npx playwright install chromium 2>&1 | sed '/^$/d' || {
+        npx playwright install chromium 2>&1 | sed '/^$/d' >&2 || {
             local os
             os=$(detect_os)
             if [[ "$os" == "linux" ]]; then
                 log_warn "Trying with system dependencies (may require sudo)..."
-                npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' || {
+                npx playwright install --with-deps chromium 2>&1 | sed '/^$/d' >&2 || {
                     log_error "Failed to install Chromium. Try manually:"
                     log_error "  npx playwright install --with-deps chromium"
                     exit "$EXIT_DEPENDENCY_ERROR"
