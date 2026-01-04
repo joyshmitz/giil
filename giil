@@ -1611,15 +1611,25 @@ function validateImageContent(buffer, contentType = null, debugMode = false) {
 
 // Helper: generate unique filename with counter if needed
 // v3: Added ext parameter for preserving original format
-function getUniqueFilename(outputDir, dateStr, index = null, ext = 'jpg') {
+// v3.0.1: Added platform parameter for platform-specific prefixes
+function getUniqueFilename(outputDir, dateStr, index = null, ext = 'jpg', platform = 'unknown') {
+    // Use platform-appropriate prefix for filenames
+    const prefixMap = {
+        icloud: 'icloud',
+        dropbox: 'dropbox',
+        gphotos: 'gphotos',
+        gdrive: 'gdrive',
+        unknown: 'image'
+    };
+    const prefix = prefixMap[platform] || 'image';
     const suffix = index !== null ? `_${String(index).padStart(3, '0')}` : '';
-    let filename = `icloud_${dateStr}${suffix}.${ext}`;
+    let filename = `${prefix}_${dateStr}${suffix}.${ext}`;
     let outputPath = join(outputDir, filename);
 
     // If file exists, add counter
     let counter = 1;
     while (existsSync(outputPath)) {
-        filename = `icloud_${dateStr}${suffix}_${counter}.${ext}`;
+        filename = `${prefix}_${dateStr}${suffix}_${counter}.${ext}`;
         outputPath = join(outputDir, filename);
         counter++;
     }
@@ -1731,8 +1741,9 @@ async function processAndSaveImage(buffer, options) {
     }
 
     // Generate filename with datetime (v3: use outputExt for format-aware filenames)
+    // v3.0.1: Pass platform for platform-specific filename prefix
     const dateStr = formatDateForFilename(captureDate);
-    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index, outputExt);
+    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index, outputExt, currentPlatform);
 
     // Clean up temp downloaded file
     if (downloadedFilePath && existsSync(downloadedFilePath)) {
@@ -2713,8 +2724,12 @@ download_dropbox_direct() {
             height=$(echo "$dims" | cut -d' ' -f2)
         fi
 
+        # Generate ISO 8601 datetime for JSON (v3.0.1: added for consistency)
+        local datetime
+        datetime=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
         cat << EOF
-{"ok":true,"schema_version":"1","platform":"dropbox","path":"${final_path}","method":"direct","size":${file_size},"width":${width},"height":${height},"sourceUrl":"${raw_url}"}
+{"ok":true,"schema_version":"1","platform":"dropbox","path":"${final_path}","method":"direct","size":${file_size},"width":${width},"height":${height},"datetime":"${datetime}","sourceUrl":"${raw_url}"}
 EOF
     elif [[ "$BASE64_OUTPUT" == "true" ]]; then
         base64 < "$final_path"
