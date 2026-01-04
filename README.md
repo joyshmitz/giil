@@ -185,10 +185,10 @@ EXIF-aware datetime stamping:
 <td width="50%">
 
 ### Image Processing
-v3.0+ preserves original bytes by default:
-- `--optimize` for MozJPEG compression
+MozJPEG compression by default:
+- Optimal size/quality balance
+- `--preserve` to keep original bytes
 - `--convert` for format conversion
-- Quality configurable (1-100)
 - HEIC auto-conversion supported
 
 </td>
@@ -258,9 +258,9 @@ giil <icloud-photo-url> [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--output DIR` | `.` | Output directory for saved images |
-| `--optimize` | off | Apply MozJPEG optimization (opt-in compression) |
+| `--preserve` | off | Preserve original bytes (skip MozJPEG compression) |
 | `--convert FMT` | — | Convert to format: `jpeg`, `png`, `webp` |
-| `--quality N` | `85` | JPEG/WebP quality 1-100 (with `--optimize` or `--convert`) |
+| `--quality N` | `85` | JPEG quality 1-100 |
 | `--base64` | off | Output base64 to stdout instead of saving file |
 | `--json` | off | Output JSON metadata (path, datetime, dimensions, method) |
 | `--all` | off | Download all photos from a shared album |
@@ -270,8 +270,8 @@ giil <icloud-photo-url> [options]
 | `--version` | — | Print version and exit |
 | `--help` | — | Show help message |
 
-> **v3.0 Behavior Change:** Original image bytes are now preserved by default (no recompression).
-> Use `--optimize` for MozJPEG compression or `--convert` for format conversion.
+> **Default Behavior:** Images are compressed with MozJPEG for optimal size/quality balance.
+> Use `--preserve` to keep original bytes without recompression.
 
 ### Supported URL Formats
 
@@ -481,7 +481,7 @@ giil "https://share.icloud.com/photos/XXX" --all --output ~/album
 6. **Image Processing**
    - Extracts EXIF datetime for filename
    - Converts HEIC/HEIF if necessary
-   - Preserves original bytes (v3.0+) or compresses with `--optimize`
+   - Compresses with MozJPEG (or `--preserve` to keep original bytes)
 
 7. **Output Generation**
    - Writes file to disk (or base64 to stdout)
@@ -694,22 +694,22 @@ sudo apt-get install libheif-examples  # Debian/Ubuntu
 sudo dnf install libheif-tools         # Fedora
 ```
 
-### MozJPEG Compression (Opt-in)
+### MozJPEG Compression (Default)
 
-**v3.0+:** By default, giil preserves the original image bytes without recompression. Use `--optimize` to enable MozJPEG compression:
+By default, giil compresses images with MozJPEG for optimal size/quality balance:
 
 ```bash
-# Preserve original bytes (default)
+# MozJPEG compression (default)
 giil "https://share.icloud.com/photos/..."
 
-# Apply MozJPEG optimization
-giil "https://share.icloud.com/photos/..." --optimize
+# Preserve original bytes (skip compression)
+giil "https://share.icloud.com/photos/..." --preserve
 
 # Convert to WebP format
 giil "https://share.icloud.com/photos/..." --convert webp
 ```
 
-When `--optimize` is used, Sharp applies MozJPEG:
+Sharp applies MozJPEG compression:
 
 ```javascript
 sharp(buffer).jpeg({
@@ -719,7 +719,7 @@ sharp(buffer).jpeg({
 })
 ```
 
-**Compression characteristics (with --optimize):**
+**Compression characteristics:**
 - **40-50% smaller** than standard JPEG at equivalent quality
 - **4:2:0 chroma subsampling** reduces color data (imperceptible to human eye)
 - **Quality 85** provides excellent visual quality with significant size reduction

@@ -91,6 +91,8 @@ This is a **hybrid project**: a Bash wrapper script with an embedded Node.js ext
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--output DIR` | `.` | Output directory for saved images |
+| `--preserve` | off | Preserve original bytes (skip MozJPEG compression) |
+| `--convert FMT` | — | Convert to format: `jpeg`, `png`, `webp` |
 | `--quality N` | `85` | JPEG quality (1-100) |
 | `--base64` | off | Output base64 to stdout instead of saving file |
 | `--json` | off | Output JSON metadata (path, datetime, dimensions, method) |
@@ -100,6 +102,8 @@ This is a **hybrid project**: a Bash wrapper script with an embedded Node.js ext
 | `--update` | off | Force reinstall of Playwright and dependencies |
 | `--version` | — | Print version and exit |
 | `--help` | — | Show help message |
+
+> **Default:** MozJPEG compression for optimal size/quality. Use `--preserve` to keep original bytes.
 
 ---
 

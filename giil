@@ -553,21 +553,26 @@ detect_os() {
 
 detect_platform() {
     local url="$1"
+    # Domain boundary patterns use :// or ://*. to prevent matching fake domains
+    # (e.g., 'fakedropbox.com' must NOT match 'dropbox.com')
     case "$url" in
-        # iCloud photo shares (existing v2.x support)
-        *share.icloud.com/photos/* | *icloud.com/photos/*)
+        # iCloud: ://icloud.com or ://*.icloud.com (covers share.icloud.com, www.icloud.com)
+        *://icloud.com/photos/* | *://*.icloud.com/photos/*)
             echo "icloud"
             ;;
-        # Dropbox shared links (v3.0+)
-        *dropbox.com/s/* | *dropbox.com/scl/fi/* | *dropbox.com/sh/*)
+        # Dropbox: ://dropbox.com or ://*.dropbox.com (covers www, dl, etc.)
+        *://dropbox.com/s/* | *://*.dropbox.com/s/* | \
+        *://dropbox.com/scl/fi/* | *://*.dropbox.com/scl/fi/* | \
+        *://dropbox.com/sh/* | *://*.dropbox.com/sh/*)
             echo "dropbox"
             ;;
-        # Google Photos shared albums/photos (v3.0+)
-        *photos.app.goo.gl/* | *photos.google.com/share/*)
+        # Google Photos: exact domains only
+        *://photos.app.goo.gl/* | *://photos.google.com/share/*)
             echo "gphotos"
             ;;
-        # Google Drive file links (v3.0+ experimental)
-        *drive.google.com/file/d/* | *drive.google.com/open?id=*)
+        # Google Drive: exact domains only
+        *://drive.google.com/file/d/* | *://drive.google.com/open?id=* | \
+        *://docs.google.com/file/d/*)
             echo "gdrive"
             ;;
         *)
@@ -1525,40 +1530,40 @@ async function processAndSaveImage(buffer, options) {
         captureDate = new Date();
     }
 
-    // v3 behavior: Only process if explicitly requested
+    // Process image (default: MozJPEG compression)
     let processedBuffer;
     let outputExt;
 
     if (needsProcessing) {
-        // Apply Sharp processing when requested
+        // Apply Sharp processing (default: MozJPEG compression)
         let pipeline = sharp(processableBuffer);
 
-        if (convert === 'jpeg' || (optimize && !convert)) {
-            // Convert to JPEG or optimize with MozJPEG
+        if (convert === 'jpeg' || !convert) {
+            // Default: MozJPEG JPEG compression for optimal size/quality
             pipeline = pipeline.jpeg({
                 quality: quality,
-                mozjpeg: optimize === true,
+                mozjpeg: true,
                 chromaSubsampling: '4:2:0'
             });
             outputExt = 'jpg';
-            console.error(`[giil] Processing: ${optimize ? 'MozJPEG optimization' : 'JPEG conversion'} (quality ${quality})`);
+            console.error(`[giil] MozJPEG compression (quality ${quality})`);
         } else if (convert === 'png') {
             pipeline = pipeline.png({ compressionLevel: 9 });
             outputExt = 'png';
-            console.error('[giil] Processing: PNG conversion');
+            console.error('[giil] PNG conversion');
         } else if (convert === 'webp') {
             pipeline = pipeline.webp({ quality: quality });
             outputExt = 'webp';
-            console.error(`[giil] Processing: WebP conversion (quality ${quality})`);
+            console.error(`[giil] WebP conversion (quality ${quality})`);
         }
 
         processedBuffer = await pipeline.toBuffer();
     } else {
-        // v3 default: Preserve original bytes
+        // --preserve mode: Keep original bytes
         processedBuffer = processableBuffer;
         // Normalize 'jpeg' to 'jpg' for consistent extension naming
         outputExt = metadata.format === 'jpeg' ? 'jpg' : (metadata.format || 'jpg');
-        console.error('[giil] Preserving original bytes (use --optimize for MozJPEG compression)');
+        console.error('[giil] Preserving original bytes');
     }
 
     // Generate filename with datetime (v3: use outputExt for format-aware filenames)
@@ -1781,7 +1786,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         }
     }
 
-    // Process and save (v3: pass optimize/convert flags)
+    // Process and save
     console.error('[giil] Processing image...');
     return await processAndSaveImage(finalBuffer, {
         outputDir,
@@ -1792,7 +1797,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         sourceUrl,
         downloadedFilePath,
         index,
-        optimize: optimizeMode,
+        preserve: preserveMode,
         convert: convertFormat
     });
 }
@@ -2031,7 +2036,7 @@ async function extractImage() {
                                     sourceUrl: fullResResult.url,
                                     downloadedFilePath: null,
                                     index: i + 1,
-                                    optimize: optimizeMode,
+                                    preserve: preserveMode,
                                     convert: convertFormat
                                 });
                                 results.push(result);
@@ -2176,7 +2181,7 @@ async function extractImage() {
                             sourceUrl: gdriveResult.sourceUrl,
                             downloadedFilePath: null,
                             index: undefined,
-                            optimize: optimizeMode,
+                            preserve: preserveMode,
                             convert: convertFormat
                         });
                         results.push(result);
