@@ -55,6 +55,9 @@ const extractors = [
 
     // errorCodeToExit mapping
     { name: 'errorCodeToExit', pattern: /const errorCodeToExit = \{[\s\S]*?\};/ },
+
+    // extractGooglePhotosBaseUrl function (pure URL manipulation)
+    { name: 'extractGooglePhotosBaseUrl', pattern: /function extractGooglePhotosBaseUrl\(cdnUrl\) \{[\s\S]*?^\}/m },
 ];
 
 // Build the output module
@@ -93,7 +96,8 @@ export {
     validateImageContent,
     formatJsonSuccess,
     formatJsonError,
-    errorCodeToExit
+    errorCodeToExit,
+    extractGooglePhotosBaseUrl
 };
 `;
 
