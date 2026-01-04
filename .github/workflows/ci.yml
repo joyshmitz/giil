@@ -67,6 +67,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install test dependencies
+        run: |
+          # The extracted functions module imports exifr for EXIF datetime parsing
+          npm install --no-save exifr
+
       - name: Run pure function unit tests
         run: |
           node --test scripts/tests/*.test.mjs
