@@ -87,16 +87,21 @@ This bridges your Apple devices and remote AI coding sessions. No file transfers
 - [Highlights](#-highlights)
 - [Quickstart](#-quickstart)
 - [Usage](#-usage)
+  - [Options](#options)
+  - [Supported Platforms](#supported-platforms)
 - [Output Modes](#-output-modes)
 - [Album Mode](#-album-mode)
 - [How It Works](#-how-it-works)
 - [Capture Strategies in Detail](#-capture-strategies-in-detail)
+- [Platform-Specific Optimizations](#-platform-specific-optimizations)
 - [Image Processing Pipeline](#-image-processing-pipeline)
 - [Design Principles](#-design-principles)
 - [Architecture](#-architecture)
 - [File Locations](#-file-locations)
 - [Performance](#-performance)
 - [Troubleshooting](#-troubleshooting)
+- [Exit Codes](#-exit-codes)
+- [Terminal Styling](#-terminal-styling)
 - [Environment Variables](#-environment-variables)
 - [Dependencies](#-dependencies)
 - [Security & Privacy](#-security--privacy)
@@ -108,17 +113,18 @@ This bridges your Apple devices and remote AI coding sessions. No file transfers
 
 ## 💡 Why giil Exists
 
-iCloud photo shares present a unique challenge for automation:
+Cloud photo sharing services present unique challenges for automation:
 
 | Problem | Why It's Hard | How giil Solves It |
 |---------|---------------|-------------------|
-| **JavaScript-heavy SPA** | Standard `curl`/`wget` can't execute JS or render the page | Headless Chromium via Playwright |
+| **JavaScript-heavy SPAs** | Standard `curl`/`wget` can't execute JS or render pages | Headless Chromium via Playwright (or direct download for Dropbox) |
 | **Dynamic image loading** | Images load asynchronously from CDN after page render | Network interception captures CDN responses |
 | **No direct download links** | URLs are session-specific and expire quickly | Clicks native Download button or intercepts live requests |
 | **Copy/paste loses quality** | Manual screenshots result in compressed/cropped images | Captures original resolution from source |
 | **HEIC format on Apple devices** | Many tools can't process Apple's HEIC/HEIF format | Platform-aware conversion (sips/heif-convert) |
+| **Platform fragmentation** | Each service has different URL patterns and APIs | Automatic platform detection with optimized strategies |
 
-giil lets you programmatically download full-resolution images from any iCloud photo share link, which is otherwise impossible without manual browser interaction.
+giil lets you programmatically download full-resolution images from iCloud, Dropbox, Google Photos, and Google Drive share links—which is otherwise impossible without manual browser interaction.
 
 **Typical workflow:** Debugging a UI issue with Claude Code or Codex on a remote server? Screenshot on iPhone → iCloud syncs → Share link from Photos.app → Paste into SSH terminal → `giil` fetches it → AI analyzes the image. No SCP, no email, no friction.
 
@@ -266,6 +272,10 @@ giil <icloud-photo-url> [options]
 | `--all` | off | Download all photos from a shared album |
 | `--timeout N` | `60` | Page load timeout in seconds |
 | `--debug` | off | Save debug artifacts (screenshot + HTML) on failure |
+| `--verbose` | off | Show detailed progress (implies `--debug`) |
+| `--trace` | off | Enable Playwright tracing for deep debugging |
+| `--print-url` | off | Output resolved direct URL instead of downloading |
+| `--debug-dir DIR` | `.` | Directory for debug artifacts |
 | `--update` | off | Force reinstall of Playwright and dependencies |
 | `--version` | — | Print version and exit |
 | `--help` | — | Show help message |
@@ -273,13 +283,45 @@ giil <icloud-photo-url> [options]
 > **Default Behavior:** Images are compressed with MozJPEG for optimal size/quality balance.
 > Use `--preserve` to keep original bytes without recompression.
 
+### Supported Platforms
+
+giil automatically detects the sharing platform and uses the optimal download strategy:
+
+| Platform | URL Patterns | Method | Browser Required |
+|----------|--------------|--------|------------------|
+| **iCloud** | `share.icloud.com/photos/*`<br>`icloud.com/photos/#*` | 4-tier capture strategy | Yes |
+| **Dropbox** | `dropbox.com/s/*`<br>`dropbox.com/scl/fi/*` | Direct curl download (`raw=1`) | **No** |
+| **Google Photos** | `photos.app.goo.gl/*`<br>`photos.google.com/share/*` | URL extraction + `=s0` modifier | Yes |
+| **Google Drive** | `drive.google.com/file/d/*`<br>`drive.google.com/open?id=*` | Multi-tier with auth detection | Yes |
+
+**Dropbox Fast Path:** Dropbox links are downloaded directly via `curl` with no browser overhead—typically completes in under 2 seconds.
+
+**Google Photos Full-Resolution:** giil automatically appends `=s0` to CDN URLs to request maximum resolution (the `s0` modifier bypasses size restrictions).
+
 ### Supported URL Formats
 
-Both formats are automatically detected and normalized:
-
+**iCloud** (both formats automatically normalized):
 ```
 https://share.icloud.com/photos/02cD9okNHvVd-uuDnPCH3ZEEA
 https://www.icloud.com/photos/#02cD9okNHvVd-uuDnPCH3ZEEA
+```
+
+**Dropbox:**
+```
+https://www.dropbox.com/s/abc123/photo.jpg
+https://www.dropbox.com/scl/fi/xyz789/image.png
+```
+
+**Google Photos:**
+```
+https://photos.app.goo.gl/abc123xyz
+https://photos.google.com/share/AF1QipN...
+```
+
+**Google Drive:**
+```
+https://drive.google.com/file/d/1ABC.../view
+https://drive.google.com/open?id=1ABC...
 ```
 
 ---
@@ -304,14 +346,18 @@ echo "Downloaded: $IMAGE_PATH"
 
 ### JSON Mode: `--json`
 
-Returns structured metadata for programmatic use.
+Returns structured metadata for programmatic use. The JSON schema includes metadata for reliable scripting.
 
 ```bash
 giil "https://share.icloud.com/photos/XXX" --json
 ```
 
+**Success response:**
 ```json
 {
+  "ok": true,
+  "schema_version": "1",
+  "platform": "icloud",
   "path": "/absolute/path/to/icloud_20240115_143245.jpg",
   "datetime": "2024-01-15T14:32:45.000Z",
   "sourceUrl": "https://cvws.icloud-content.com/...",
@@ -322,19 +368,43 @@ giil "https://share.icloud.com/photos/XXX" --json
 }
 ```
 
+**Error response:**
+```json
+{
+  "ok": false,
+  "schema_version": "1",
+  "platform": "icloud",
+  "error": {
+    "code": "AUTH_REQUIRED",
+    "message": "Login required - link is not publicly shared",
+    "remediation": "The file is not publicly shared. The owner must enable public access."
+  }
+}
+```
+
 | Field | Description |
 |-------|-------------|
+| `ok` | Boolean success indicator (`true` or `false`) |
+| `schema_version` | JSON schema version (currently `"1"`) |
+| `platform` | Detected platform: `icloud`, `dropbox`, `gphotos`, `gdrive` |
 | `path` | Absolute path to saved file |
 | `datetime` | ISO 8601 timestamp (from EXIF or capture time) |
 | `sourceUrl` | CDN URL where image was obtained |
-| `method` | Capture strategy used (see [Capture Strategy](#-capture-strategy-deep-dive)) |
+| `method` | Capture strategy: `download`, `network`, `element-screenshot`, `viewport-screenshot`, `direct` |
 | `size` | File size in bytes |
 | `width` | Image width in pixels |
 | `height` | Image height in pixels |
+| `error.code` | Error code (see [Exit Codes](#-exit-codes)) |
+| `error.message` | Human-readable error description |
+| `error.remediation` | Suggested fix for the error |
 
 **Parse with jq:**
 ```bash
-giil "https://share.icloud.com/photos/XXX" --json | jq -r '.path'
+# Get path (if successful)
+giil "https://share.icloud.com/photos/XXX" --json | jq -r 'if .ok then .path else .error.message end'
+
+# Check success
+giil "..." --json | jq -e '.ok' && echo "Success" || echo "Failed"
 ```
 
 ### Base64 Mode: `--base64`
@@ -647,6 +717,61 @@ await page.screenshot({ type: 'png', fullPage: false });
                                                       │screenshot│
                                                       └──────────┘
 ```
+
+---
+
+## 🔌 Platform-Specific Optimizations
+
+Each supported platform has custom handling for optimal results:
+
+### iCloud
+
+- **4-tier capture strategy** as described above
+- Cookie banner auto-dismissal
+- Album detection and iteration
+- HEIC/HEIF format handling
+
+### Dropbox
+
+Dropbox provides a fast path that bypasses Playwright entirely:
+
+```bash
+# URL transformation:
+https://www.dropbox.com/s/abc123/photo.jpg?dl=0
+→ https://www.dropbox.com/s/abc123/photo.jpg?raw=1
+```
+
+- Direct `curl` download (no browser overhead)
+- Typically completes in **1-2 seconds**
+- Full original quality preserved
+- Works with any Dropbox shared link format
+
+### Google Photos
+
+Google Photos uses URL modifiers for resolution control:
+
+```
+Original CDN URL:
+https://lh3.googleusercontent.com/pw/xxx=w1920-h1080
+
+Full-resolution URL (giil applies =s0):
+https://lh3.googleusercontent.com/pw/xxx=s0
+```
+
+- `=s0` modifier requests maximum resolution
+- Network interception captures all CDN responses
+- Collects unique base URLs for album mode
+- Automatic full-res download attempt
+
+### Google Drive
+
+Multi-tier approach with authentication detection:
+
+1. **Direct download URL** (`/uc?export=download`)
+2. **Thumbnail extraction** (high-res `sz=w4000`)
+3. **Screenshot fallback**
+
+**Auth detection:** If the file requires login, giil detects the redirect and returns a meaningful error (`AUTH_REQUIRED`) instead of capturing a login page.
 
 ---
 
@@ -1052,6 +1177,98 @@ giil "https://share.icloud.com/photos/XXX" --debug
 On failure, this saves:
 - `giil_debug_<timestamp>.png` - Screenshot of page state
 - `giil_debug_<timestamp>.html` - Full DOM for inspection
+
+### Verbose and Trace Modes
+
+For deeper debugging:
+
+```bash
+# Verbose: detailed progress logging
+giil "..." --verbose
+
+# Trace: Playwright trace recording (generates trace.zip)
+giil "..." --trace
+
+# View trace in browser
+npx playwright show-trace ~/.cache/giil/trace.zip
+```
+
+---
+
+## 🔢 Exit Codes
+
+giil uses semantic exit codes for scripting and error handling:
+
+| Code | Name | Description |
+|------|------|-------------|
+| `0` | Success | Image captured and saved/output |
+| `1` | Capture Failure | All capture strategies failed |
+| `2` | Usage Error | Invalid arguments or missing URL |
+| `3` | Dependency Error | Node.js, Playwright, or Chromium issue |
+| `10` | Network Error | Timeout, DNS failure, unreachable host |
+| `11` | Auth Required | Login redirect, password required, not publicly shared |
+| `12` | Not Found | Expired link, deleted file, 404 |
+| `13` | Unsupported Type | Video, Google Doc, or non-image content |
+| `20` | Internal Error | Bug in giil (please report!) |
+
+**Scripting with exit codes:**
+```bash
+giil "https://share.icloud.com/photos/XXX" 2>/dev/null
+case $? in
+    0) echo "Success!" ;;
+    10) echo "Network issue - retry later" ;;
+    11) echo "Link not public - ask owner to share" ;;
+    12) echo "Link expired" ;;
+    *) echo "Failed with code $?" ;;
+esac
+```
+
+---
+
+## 🎨 Terminal Styling
+
+giil integrates with [gum](https://github.com/charmbracelet/gum) for beautiful terminal output when available:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                   │
+│   ╔════════════════════════════════════════════════════════════╗ │
+│   ║                           giil                              ║ │
+│   ║               Get iCloud Image Link v3.0.0                  ║ │
+│   ╚════════════════════════════════════════════════════════════╝ │
+│                                                                   │
+│   ◐ Launching browser...                                          │
+│   ✓ Download button clicked                                       │
+│   ✓ Image processed: 4032×3024, 1.2 MB → 456 KB                  │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Styling Behavior
+
+| Environment | Output Style |
+|-------------|--------------|
+| TTY with gum installed | Full gum styling (banners, spinners, colors) |
+| TTY without gum | ANSI color codes |
+| Non-TTY (piped) | Plain text |
+| CI environment (`$CI` set) | Plain text, no gum |
+| `GIIL_NO_GUM=1` | Force ANSI fallback |
+
+### Install gum (Optional)
+
+```bash
+# macOS
+brew install gum
+
+# Linux (apt)
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+sudo apt update && sudo apt install gum
+
+# Arch
+sudo pacman -S gum
+```
 
 ---
 
