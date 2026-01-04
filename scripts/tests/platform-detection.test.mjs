@@ -142,6 +142,18 @@ describe('detectPlatform', () => {
                 'unknown'
             );
         });
+
+        it('rejects fake icloud domains (domain boundary check)', () => {
+            // 'fakeicloud.com' should NOT match - proper domain boundary required
+            assert.strictEqual(
+                detectPlatform('https://fakeicloud.com/photos/abc123'),
+                'unknown'
+            );
+            assert.strictEqual(
+                detectPlatform('https://not-icloud.com/photos/abc123'),
+                'unknown'
+            );
+        });
     });
 
     describe('Case insensitivity', () => {
