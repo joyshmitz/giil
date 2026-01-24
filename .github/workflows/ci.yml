@@ -120,7 +120,15 @@ jobs:
         if: ${{ hashFiles(format('scripts/tests/e2e/{0}.test.sh', matrix.platform)) != '' }}
         run: |
           export GIIL_LOG_FORMAT=json
-          bash scripts/tests/e2e/${{ matrix.platform }}.test.sh
+          # Exit code 77 means "skip" - treat as success
+          bash scripts/tests/e2e/${{ matrix.platform }}.test.sh || {
+            exit_code=$?
+            if [[ "$exit_code" -eq 77 ]]; then
+              echo "::notice::Test skipped (exit code 77)"
+              exit 0
+            fi
+            exit "$exit_code"
+          }
         env:
           GIIL_HOME: ${{ github.workspace }}/.ci-cache/giil
 
