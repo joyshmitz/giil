@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/version-3.0.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blueviolet?style=for-the-badge" alt="Platform" />
   <img src="https://img.shields.io/badge/runtime-Node.js%2018+-purple?style=for-the-badge" alt="Runtime" />
-  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" />
+  <img src="https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue-the-badge" alt="License" />
 </p>
 
 <h1 align="center">giil</h1>
@@ -1798,7 +1798,7 @@ rm -rf ~/.cache/ms-playwright
 
 ## 📄 License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License (with OpenAI/Anthropic Rider). See [LICENSE](LICENSE) for details.
 
 ---
 
