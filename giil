@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-VERSION="3.1.0"
+VERSION="3.2.0"
 
 # -----------------------------------------------------------------------------
 # Exit Codes (v3.0+ extended scheme with backwards compatibility)
@@ -1434,6 +1434,138 @@ async function downloadGooglePhotosFullRes(cdnUrl) {
     }
 }
 
+// Detect the true media type of a downloaded buffer from its magic bytes.
+// Google Photos' native download (Shift+D) returns the ORIGINAL file, which may
+// be an image, a video (MP4/MOV/WebM), or a ZIP archive (multi-item selection).
+// We must not feed videos/zips through the image pipeline.
+// Returns { kind: 'image'|'video'|'zip'|'unknown', ext: string }.
+function detectDownloadKind(buffer, suggestedName = '') {
+    const ext = (suggestedName.match(/\.([A-Za-z0-9]+)$/) || [null, ''])[1].toLowerCase();
+
+    if (!buffer || buffer.length < 12) {
+        return { kind: 'unknown', ext: ext || 'bin' };
+    }
+
+    const b = buffer;
+    // ZIP / "PK\x03\x04" (or empty/spanned archive markers)
+    if (b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07)) {
+        return { kind: 'zip', ext: 'zip' };
+    }
+    // Images: JPEG, PNG, GIF, WebP, HEIC/HEIF
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { kind: 'image', ext: 'jpg' };
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { kind: 'image', ext: 'png' };
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { kind: 'image', ext: 'gif' };
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+        return { kind: 'image', ext: 'webp' };
+    }
+    // ISO Base Media (MP4/MOV/HEIC): bytes 4-7 are 'ftyp'
+    if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+        const brand = b.slice(8, 12).toString('ascii');
+        if (brand.startsWith('heic') || brand.startsWith('heif') || brand.startsWith('mif1')) {
+            return { kind: 'image', ext: 'heic' };
+        }
+        if (brand.startsWith('qt')) return { kind: 'video', ext: 'mov' };
+        return { kind: 'video', ext: 'mp4' };
+    }
+    // Matroska / WebM ("\x1a\x45\xdf\xa3")
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) {
+        return { kind: 'video', ext: ext === 'mkv' ? 'mkv' : 'webm' };
+    }
+    // Fall back to the suggested filename extension when bytes are inconclusive.
+    if (['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', '3gp'].includes(ext)) {
+        return { kind: 'video', ext };
+    }
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff'].includes(ext)) {
+        return { kind: 'image', ext: ext === 'jpeg' ? 'jpg' : ext };
+    }
+    return { kind: 'unknown', ext: ext || 'bin' };
+}
+
+// Save a non-image original (video or ZIP archive) straight to disk, bypassing
+// the Sharp image pipeline. Used for Google Photos native downloads of videos
+// and multi-item ZIP archives. Emits the same path / JSON contract as
+// processAndSaveImage so the bash wrapper and --format consumers work unchanged.
+function saveOriginalDownload(buffer, options) {
+    const { outputDir, jsonOutput, base64Output, captureMethod, sourceUrl, index, ext, kind } = options;
+
+    if (base64Output) {
+        // base64 of a binary original (video/zip) is still valid output.
+        if (jsonOutput) {
+            const result = formatJsonSuccess({
+                base64: buffer.toString('base64'),
+                datetime: formatDateForJson(new Date()),
+                method: captureMethod,
+                media_kind: kind,
+                ...(index !== undefined && { item_index: index })
+            });
+            console.log(JSON.stringify(result));
+        } else {
+            console.log(buffer.toString('base64'));
+        }
+        logInfo(`✓ Output: base64 ${kind} (${(buffer.length / 1024).toFixed(1)} KB)`);
+        return { outputPath: null, captureDate: new Date(), metadata: null };
+    }
+
+    const dateStr = formatDateForFilename(new Date());
+    const { outputPath } = getUniqueFilename(outputDir, dateStr, index ?? null, ext, currentPlatform);
+    writeFileSync(outputPath, buffer);
+
+    if (jsonOutput) {
+        const result = formatJsonSuccess({
+            path: outputPath,
+            datetime: formatDateForJson(new Date()),
+            sourceUrl: sourceUrl || url,
+            method: captureMethod,
+            size: buffer.length,
+            media_kind: kind,
+            ...(index !== undefined && { item_index: index })
+        });
+        console.log(JSON.stringify(result));
+    } else {
+        console.log(outputPath);
+    }
+    logInfo(`✓ Saved: ${outputPath} (${(buffer.length / 1024).toFixed(1)} KB, ${kind}, ${captureMethod})`);
+    return { outputPath, captureDate: new Date(), metadata: null };
+}
+
+// Trigger Google Photos' native "download original" via the Shift+D keyboard
+// shortcut on a shared-link page and capture the resulting download event.
+// This is the ONLY way to get the true original bytes for a shared item:
+//   - single photo -> original-quality image (full bit depth, real dimensions)
+//   - single video -> original-quality video file (not a poster-frame screenshot)
+//   - multi-select / album -> a .zip archive of all originals
+// The =s0 CDN trick only ever yields a re-encoded preview (image-only, ~75MP cap)
+// and is kept as a fallback. Returns { buffer, suggestedName } or null.
+async function tryGooglePhotosNativeDownload(page, outputDir, timeoutMs) {
+    const dlTimeout = Math.min(Math.max(timeoutMs, 15000), 120000);
+    try {
+        // Focus the document body so the shortcut is delivered to the viewer.
+        await page.bringToFront().catch(() => {});
+        try { await page.locator('body').click({ timeout: 1500, position: { x: 5, y: 5 } }); } catch (e) {}
+
+        const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: dlTimeout }),
+            page.keyboard.press('Shift+KeyD')
+        ]);
+
+        if (!download) return null;
+
+        const suggestedName = download.suggestedFilename() || 'gphotos_original';
+        const safeName = basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_');
+        const tmpPath = join(outputDir, `_temp_${Date.now()}_${safeName}`);
+        await download.saveAs(tmpPath);
+        const buffer = readFileSync(tmpPath);
+        try { unlinkSync(tmpPath); } catch (e) {}
+
+        if (!buffer || buffer.length < 1) return null;
+        return { buffer, suggestedName: safeName, url: download.url() };
+    } catch (e) {
+        verbose(`Google Photos Shift+D download did not fire: ${e.message}`);
+        return null;
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Google Drive URL Helpers (v3.0+)
 // -----------------------------------------------------------------------------
@@ -2067,9 +2199,41 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     let sourceUrl = bestImageUrl;
 
     // ========================================
+    // STRATEGY 0: Google Photos native download (Shift+D -> original file)
+    // ========================================
+    // For Google Photos shared links, the only way to get the ORIGINAL bytes
+    // (full-quality photo, original video, or a .zip for multi-item selections)
+    // is the viewer's Shift+D shortcut. The =s0 CDN trick and screenshots only
+    // ever yield a re-encoded preview or, for videos, a poster-frame image. We
+    // try the native download first and, for non-image originals (video/zip),
+    // save them directly instead of silently degrading to a screenshot.
+    if (currentPlatform === 'gphotos' && !options.skipDownloadButton) {
+        verbose('Trying Google Photos native download (Shift+D)...');
+        const native = await tryGooglePhotosNativeDownload(page, outputDir, timeoutMs);
+        if (native && native.buffer && native.buffer.length >= 1000) {
+            const { kind, ext } = detectDownloadKind(native.buffer, native.suggestedName);
+            if (kind === 'video' || kind === 'zip') {
+                // Non-image original: save raw bytes, bypassing the image pipeline.
+                logInfo(`Google Photos original ${kind}: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
+                return saveOriginalDownload(native.buffer, {
+                    outputDir, jsonOutput, base64Output,
+                    captureMethod: 'download', sourceUrl: native.url || url,
+                    index, ext, kind
+                });
+            }
+            // Image original: feed through the normal pipeline so EXIF/--preserve/
+            // --convert/compression all behave consistently.
+            logInfo(`Google Photos original image: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
+            finalBuffer = native.buffer;
+            captureMethod = 'download';
+            sourceUrl = native.url || url;
+        }
+    }
+
+    // ========================================
     // STRATEGY 1: Click Download button
     // ========================================
-    if (!options.skipDownloadButton) {
+    if (!finalBuffer && !options.skipDownloadButton) {
         verbose('Trying download button...');
         const downloadSelectors = [
             'button[aria-label="Download"]',
@@ -2204,6 +2368,24 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         throw new Error('Failed to capture image - buffer too small or empty');
     }
 
+    // Fail loudly instead of silently downgrading: if this Google Photos item is
+    // a video but we never got the native download and have fallen back to a
+    // screenshot, we'd otherwise save a poster frame of the first video frame.
+    // That is exactly the bug reported in #2 (video -> .jpg screenshot). Refuse.
+    if (currentPlatform === 'gphotos' && imageCapture && imageCapture.sawVideo &&
+        (captureMethod === 'element-screenshot' || captureMethod === 'viewport-screenshot')) {
+        const err = new Error(
+            'Google Photos item is a video and the original could not be downloaded. ' +
+            'giil avoids saving a poster-frame screenshot in its place. ' +
+            'The Shift+D download did not fire (Chromium may lack Widevine/H.264 support, ' +
+            'or the link requires sign-in). Open the share link in a browser and press Shift+D, ' +
+            'or run with --debug to inspect.'
+        );
+        err.code = 'UNSUPPORTED_TYPE';
+        err.exitCode = ExitCodes.UNSUPPORTED_TYPE;
+        throw err;
+    }
+
     // Validate content (detect HTML error pages masquerading as images)
     // Skip validation for screenshots (they are always valid PNG)
     if (captureMethod !== 'element-screenshot' && captureMethod !== 'viewport-screenshot') {
@@ -2239,13 +2421,28 @@ function createImageCaptureHandler(debugMode) {
         url: null,
         contentType: null,
         // For album mode: collect all unique Google Photos CDN base URLs
-        gphotoUrls: new Set()
+        gphotoUrls: new Set(),
+        // True when the page served a video manifest/stream: the intercepted
+        // "image" is then only a poster frame, so we must not present it as the media.
+        sawVideo: false
     };
 
     const handler = async (response) => {
         try {
             const respUrl = response.url();
             const contentType = (response.headers()['content-type'] || '').toLowerCase();
+
+            // Google Photos serves video bytes through a separate media endpoint
+            // (content-type vnd.google-photos.video-* or video/*). Note it so the
+            // capture path can fail loudly instead of saving a poster-frame image.
+            if (contentType.includes('video') ||
+                respUrl.includes('video-downloads.googleusercontent.com') ||
+                respUrl.includes('videoplayback')) {
+                capture.sawVideo = true;
+                if (debugMode) {
+                    console.error(`[giil:debug] Video stream detected (${contentType || 'video endpoint'})`);
+                }
+            }
 
             // Platform-specific CDN detection
             const isIcloudCdn = respUrl.includes('cvws.icloud-content.com') ||
@@ -2406,6 +2603,39 @@ async function extractImage() {
             // ALL MODE: Download every photo in album
             // ========================================
             logInfo('Album mode: finding all photos...');
+
+            // Google Photos: prefer the native album download. On a shared-album
+            // page, Shift+D (with nothing selected) downloads the WHOLE album as a
+            // single .zip of original files — far better than per-thumbnail
+            // previews. Fall through to the legacy path only if it doesn't fire.
+            if (currentPlatform === 'gphotos') {
+                verbose('Album mode: trying Google Photos native album download (Shift+D)...');
+                const nativeAlbum = await tryGooglePhotosNativeDownload(page, outputDir, timeoutMs);
+                if (nativeAlbum && nativeAlbum.buffer && nativeAlbum.buffer.length >= 1000) {
+                    const { kind, ext } = detectDownloadKind(nativeAlbum.buffer, nativeAlbum.suggestedName);
+                    if (kind === 'zip' || kind === 'video') {
+                        logInfo(`Google Photos album archive: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
+                        const result = saveOriginalDownload(nativeAlbum.buffer, {
+                            outputDir, jsonOutput, base64Output,
+                            captureMethod: 'download', sourceUrl: nativeAlbum.url || url,
+                            ext, kind
+                        });
+                        results.push(result);
+                        // `return` still runs the finally block (browser close + trace save).
+                        return results;
+                    }
+                    // A single-image original means the "album" was really one photo.
+                    logInfo(`Google Photos original image: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
+                    const result = await processAndSaveImage(nativeAlbum.buffer, {
+                        outputDir, quality, base64Output, jsonOutput,
+                        captureMethod: 'download', sourceUrl: nativeAlbum.url || url,
+                        downloadedFilePath: null, preserve: preserveMode, convert: convertFormat
+                    });
+                    results.push(result);
+                    return results;
+                }
+                verbose('Native album download did not fire; falling back to per-item capture');
+            }
 
             // Find thumbnail elements (platform-aware selectors)
             const thumbnailSelectors = [

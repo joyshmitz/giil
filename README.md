@@ -328,12 +328,12 @@ giil automatically detects the sharing platform and uses the optimal download st
 |----------|--------------|--------|------------------|
 | **iCloud** | `share.icloud.com/photos/*`<br>`icloud.com/photos/#*` | 4-tier capture strategy | Yes |
 | **Dropbox** | `dropbox.com/s/*`<br>`dropbox.com/scl/fi/*` | Direct curl download (`raw=1`) | **No** |
-| **Google Photos** | `photos.app.goo.gl/*`<br>`photos.google.com/share/*` | URL extraction + `=s0` modifier | Yes |
+| **Google Photos** | `photos.app.goo.gl/*`<br>`photos.google.com/share/*` | Native download (Shift+D) → original file, falls back to `=s0` CDN | Yes |
 | **Google Drive** | `drive.google.com/file/d/*`<br>`drive.google.com/open?id=*` | Multi-tier with auth detection | Yes |
 
 **Dropbox Fast Path:** Dropbox links are downloaded directly via `curl` with no browser overhead—typically completes in under 2 seconds.
 
-**Google Photos Full-Resolution:** giil automatically appends `=s0` to CDN URLs to request maximum resolution (the `s0` modifier bypasses size restrictions).
+**Google Photos Original Files:** giil first triggers the Google Photos viewer's native download (the `Shift+D` shortcut), which yields the **original uploaded file** — a full-quality photo, the original video (not a poster-frame screenshot), or a `.zip` archive when downloading a whole album. If the native download is unavailable, it falls back to fetching the CDN image with the `=s0` modifier (image-only, capped around 75 MP). When the item is a video and no original can be downloaded, giil fails with a clear error (exit code 13) rather than silently saving a screenshot of the first frame.
 
 ### Supported URL Formats
 

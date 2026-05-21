@@ -59,6 +59,9 @@ const extractors = [
     // extractGooglePhotosBaseUrl function (pure URL manipulation)
     { name: 'extractGooglePhotosBaseUrl', pattern: /function extractGooglePhotosBaseUrl\(cdnUrl\) \{[\s\S]*?^\}/m },
 
+    // detectDownloadKind function (pure magic-byte / extension classification)
+    { name: 'detectDownloadKind', pattern: /function detectDownloadKind\(buffer, suggestedName = ''\) \{[\s\S]*?^\}/m },
+
     // extractGoogleDriveFileId function (extract file ID from various URL formats)
     { name: 'extractGoogleDriveFileId', pattern: /function extractGoogleDriveFileId\(urlStr\) \{[\s\S]*?^\}/m },
 

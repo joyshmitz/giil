@@ -8,9 +8,29 @@ Repository: <https://github.com/Dicklesworthstone/giil>
 
 ---
 
+## [v3.2.0] -- 2026-05-21
+
+**Google Photos: download originals, not screenshots.** Fixes [#2](https://github.com/Dicklesworthstone/giil/issues/2).
+
+### Google Photos
+
+- Drive the viewer's native **`Shift+D`** download as the primary capture strategy for `photos.app.goo.gl` / `photos.google.com/share` links. This returns the **original uploaded file**:
+  - **Single photo** -> full-quality original image (no longer a low-quality preview/screenshot).
+  - **Single video** -> the original video file (previously giil saved a `.jpg`/`.png` poster frame of the first video frame).
+  - **Album (`--all`)** -> a single `.zip` archive of all originals (previously each item was saved as an individual low-quality preview).
+- **Fail loudly instead of silently downgrading:** when a Google Photos item is a video and no original can be downloaded, giil now exits with `UNSUPPORTED_TYPE` (exit code 13) and a clear message, rather than saving a poster-frame screenshot.
+- Non-image originals (videos, ZIP archives) are written straight to disk with the correct extension, bypassing the image (Sharp) pipeline; `--json` reports a `media_kind` field.
+- The `=s0` CDN fetch remains as an image-only fallback when the native download is unavailable.
+
+### Maintenance
+
+- Version bumped to 3.2.0 (`VERSION` + `giil` script).
+
+---
+
 ## [Unreleased] -- after v3.1.0
 
-19 commits since v3.1.0 (2026-01-13 through 2026-02-22). No new tag yet.
+19 commits since v3.1.0 (2026-01-13 through 2026-02-22). Rolled into the v3.2.0 release above.
 
 ### Image Extraction and Core Enhancements
 
