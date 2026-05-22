@@ -112,6 +112,44 @@ describe('detectDownloadKind Tests', () => {
             assert.strictEqual(r.ext, 'heic');
         });
 
+        it('detects 10-bit HEIC (ftyp heix) as image, not video/mp4', () => {
+            // heix is the standard brand for 10-bit HEIC; must NOT fall through to mp4.
+            const r = detectDownloadKind(
+                buf([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x78]),
+                'x.heic'
+            );
+            assert.strictEqual(r.kind, 'image');
+            assert.strictEqual(r.ext, 'heic');
+        });
+
+        it('detects HEIC image sequence (ftyp msf1) as image, not video', () => {
+            // msf1 is HEIF image sequence container (e.g. Apple Live Photos still).
+            const r = detectDownloadKind(
+                buf([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x73, 0x66, 0x31]),
+                'live.heic'
+            );
+            assert.strictEqual(r.kind, 'image');
+            assert.strictEqual(r.ext, 'heic');
+        });
+
+        it('detects HEIC image sequence (ftyp hevc) as image, not video', () => {
+            const r = detectDownloadKind(
+                buf([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x76, 0x63]),
+                'seq.heic'
+            );
+            assert.strictEqual(r.kind, 'image');
+            assert.strictEqual(r.ext, 'heic');
+        });
+
+        it('detects AVIF (ftyp avif) as image/avif', () => {
+            const r = detectDownloadKind(
+                buf([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]),
+                'x.avif'
+            );
+            assert.strictEqual(r.kind, 'image');
+            assert.strictEqual(r.ext, 'avif');
+        });
+
         it('detects WebM / Matroska as video', () => {
             const r = detectDownloadKind(buf([0x1a, 0x45, 0xdf, 0xa3]), 'v.webm');
             assert.strictEqual(r.kind, 'video');

@@ -8,6 +8,22 @@ Repository: <https://github.com/Dicklesworthstone/giil>
 
 ---
 
+## [v3.2.1] -- 2026-05-22
+
+**HEIC brand coverage fix.** Follow-up to v3.2.0.
+
+### Google Photos / `detectDownloadKind`
+
+- Widen HEIF / HEIC magic-byte detection to recognize the full set of `ftyp` brands defined by ISO/IEC 23008-12, not just `heic` / `heif` / `mif1`:
+  - Still images: `heic`, `heix`, `heim`, `heis` (10-bit and other HEIC variants).
+  - Image sequences: `hevc`, `hevx`, `hevm`, `hevs`, `msf1` (Apple Live Photos and other HEIC image sequences).
+- Add AVIF support: `ftyp avif` (still) and `ftyp avis` (sequence) are now classified as `image/avif` instead of falling through to `video/mp4`.
+- Without this fix, a 10-bit HEIC (brand `heix`) or an Apple Live Photo (brand `msf1`) would be saved with a `.mp4` extension and the image pipeline would be skipped.
+- Extension fallback now also accepts `.avif`.
+- New unit tests cover `heix`, `msf1`, `hevc`, and `avif` brands.
+
+---
+
 ## [v3.2.0] -- 2026-05-21
 
 **Google Photos: download originals, not screenshots.** Fixes [#2](https://github.com/Dicklesworthstone/giil/issues/2).

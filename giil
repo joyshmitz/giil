@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-VERSION="3.2.0"
+VERSION="3.2.1"
 
 # -----------------------------------------------------------------------------
 # Exit Codes (v3.0+ extended scheme with backwards compatibility)
@@ -1459,11 +1459,23 @@ function detectDownloadKind(buffer, suggestedName = '') {
         b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
         return { kind: 'image', ext: 'webp' };
     }
-    // ISO Base Media (MP4/MOV/HEIC): bytes 4-7 are 'ftyp'
+    // ISO Base Media (MP4/MOV/HEIC/AVIF): bytes 4-7 are 'ftyp', brand is bytes 8-11
     if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
         const brand = b.slice(8, 12).toString('ascii');
-        if (brand.startsWith('heic') || brand.startsWith('heif') || brand.startsWith('mif1')) {
+        // HEIF still images and image sequences (ISO/IEC 23008-12):
+        //   heic/heix/heim/heis  -> still image
+        //   hevc/hevx/hevm/hevs  -> image sequence (HEVC-coded items)
+        //   mif1                 -> container with HEVC still item
+        //   msf1                 -> container with HEVC image sequence
+        // Apple Live Photos and 10-bit HEIC ship as heix/msf1, NOT heic.
+        if (brand.startsWith('hei') || brand.startsWith('hev') ||
+            brand.startsWith('mif1') || brand.startsWith('msf1')) {
             return { kind: 'image', ext: 'heic' };
+        }
+        // AVIF still images and image sequences (AV1-coded HEIF):
+        //   avif -> still image, avis -> image sequence
+        if (brand.startsWith('avif') || brand.startsWith('avis')) {
+            return { kind: 'image', ext: 'avif' };
         }
         if (brand.startsWith('qt')) return { kind: 'video', ext: 'mov' };
         return { kind: 'video', ext: 'mp4' };
@@ -1476,7 +1488,7 @@ function detectDownloadKind(buffer, suggestedName = '') {
     if (['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', '3gp'].includes(ext)) {
         return { kind: 'video', ext };
     }
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff'].includes(ext)) {
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'tif', 'tiff'].includes(ext)) {
         return { kind: 'image', ext: ext === 'jpeg' ? 'jpg' : ext };
     }
     return { kind: 'unknown', ext: ext || 'bin' };
