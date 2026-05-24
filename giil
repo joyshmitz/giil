@@ -407,6 +407,11 @@ QUIET_MODE=false
 TRACE_MODE=false
 DEBUG_DIR=""
 URL=""
+# Multiple URLs may be passed in a single invocation; each is processed
+# sequentially in main(). `URL` is kept as the per-iteration cursor so the
+# downstream extractor scripts and platform-dispatch helpers (which read
+# the global) keep working unchanged. (#3)
+URLS=()
 
 # XDG-compliant cache directory
 CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
@@ -3081,20 +3086,18 @@ parse_args() {
                 exit "$EXIT_USAGE_ERROR"
                 ;;
             *)
-                if [[ -z "$URL" ]]; then
-                    URL="$1"
-                else
-                    log_error "Multiple URLs not supported (use --all for albums)"
-                    exit "$EXIT_USAGE_ERROR"
-                fi
+                URLS+=("$1")
                 shift
                 ;;
         esac
     done
 
-    if [[ -z "$URL" ]]; then
+    # Back-compat: keep `URL` populated with the first URL so any code path
+    # that still reads the scalar global behaves as before single-URL runs.
+    if [[ ${#URLS[@]} -eq 0 ]]; then
         show_quickstart
     fi
+    URL="${URLS[0]}"
 
     # Validate quality
     if ! [[ "$QUALITY" =~ ^[0-9]+$ ]] || [[ "$QUALITY" -lt 1 ]] || [[ "$QUALITY" -gt 100 ]]; then
@@ -3300,6 +3303,18 @@ main() {
         log_info "Album mode: downloading all photos"
     fi
 
+    # Process every URL in turn. Each iteration sets `URL` (the global the
+    # platform-dispatch and extractor helpers read) so the per-URL handlers
+    # remain single-URL-shaped — no need to thread an array through every
+    # downstream call. (#3)
+    local _giil_url_total=${#URLS[@]}
+    local _giil_url_index=0
+    for URL in "${URLS[@]}"; do
+        _giil_url_index=$((_giil_url_index + 1))
+        if [[ $_giil_url_total -gt 1 ]]; then
+            log_info "Processing URL $_giil_url_index of $_giil_url_total"
+        fi
+
     # Detect platform and use appropriate strategy (v3.0+)
     local platform
     platform=$(detect_platform "$URL")
@@ -3307,9 +3322,17 @@ main() {
 
     case "$platform" in
         dropbox)
-            # Fast path: direct download, no Playwright needed
-            download_dropbox_direct
-            # download_dropbox_direct exits, so we never reach here
+            # Fast path: direct download, no Playwright needed.
+            # NOTE: download_dropbox_direct calls `exit` on completion, so when
+            # the user passes multiple URLs and the *first* is a Dropbox link,
+            # the remaining URLs would be silently dropped. Run it in a subshell
+            # for multi-URL invocations so the parent shell survives the exit.
+            if [[ $_giil_url_total -gt 1 ]]; then
+                ( download_dropbox_direct ) || log_warn "Dropbox URL $_giil_url_index failed"
+            else
+                download_dropbox_direct
+            fi
+            # download_dropbox_direct exits, so we never reach here in single-URL mode
             ;;
         icloud|gphotos|gdrive|unknown)
             # Standard path: use Playwright extractor
@@ -3344,12 +3367,13 @@ main() {
 
             cd "$GIIL_HOME"
             if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
-                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon
+                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon || log_warn "URL $_giil_url_index failed"
             else
-                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE"
+                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" || log_warn "URL $_giil_url_index failed"
             fi
             ;;
     esac
+    done
 }
 
 main "$@"
