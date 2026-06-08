@@ -16,7 +16,15 @@
 #   - JSON output mode for scripting
 #
 # Usage:
-#   giil <icloud-photo-url> [options]
+#   giil <share-url> [<share-url> ...] [options]
+#
+# Multiple URLs: Playwright-backed platforms (iCloud / Google Photos / Drive)
+# are processed in ONE headless browser using multiple isolated tabs/contexts
+# with bounded concurrency (default 3), instead of launching a browser per URL
+# (issue #4). Dropbox URLs keep their separate fast direct-download path.
+# Env knobs:
+#   GIIL_BATCH_CONCURRENCY=N   Max concurrent tabs in a batch (default 3)
+#   GIIL_NO_BATCH=1            Force the legacy one-process-per-URL behavior
 #
 # Options:
 #   --base64         Output image as base64 to stdout
@@ -36,7 +44,7 @@
 
 set -euo pipefail
 
-VERSION="3.2.1"
+VERSION="3.3.0"
 
 # -----------------------------------------------------------------------------
 # Exit Codes (v3.0+ extended scheme with backwards compatibility)
@@ -695,7 +703,13 @@ giil v${VERSION} — Get Image from Internet Link
 Downloads images from cloud photo sharing services with maximum reliability.
 
 USAGE
-  giil <URL> [OPTIONS]
+  giil <URL> [<URL> ...] [OPTIONS]
+
+  Multiple URLs are supported. Playwright-backed platforms (iCloud, Google
+  Photos, Google Drive) share ONE headless browser across multiple isolated
+  tabs (bounded concurrency, default 3 via GIIL_BATCH_CONCURRENCY); Dropbox
+  uses its separate fast direct-download path. GIIL_NO_BATCH=1 forces the
+  legacy one-process-per-URL behavior.
 
 SUPPORTED PLATFORMS
   ✓ iCloud Photos    share.icloud.com/photos/... | www.icloud.com/photos/#...
@@ -1313,42 +1327,103 @@ const MAX_RETRIES = 3;              // Max retries for rate-limited requests
  * @property {boolean} [requiresBrowser] - True if platform needs Playwright (false for direct downloads like Dropbox)
  */
 
+// -----------------------------------------------------------------------------
+// Per-job context (v3.3+ - single-browser multi-tab extraction, issue #4)
+// -----------------------------------------------------------------------------
+// Historically every per-URL option lived in a module-level `const`. To run
+// several URLs concurrently inside ONE browser (each in its own isolated
+// BrowserContext), those options must travel with the job instead of being
+// global — otherwise concurrent jobs would clobber each other's `url`,
+// `quality`, platform, etc. across `await` boundaries.
+//
+// `ctx` bundles one job's options. Every helper that used to read a global now
+// takes a `ctx` as its first argument. The single-URL positional CLI path
+// builds one `ctx` from argv; the new `--batch` path builds one `ctx` per job
+// and runs them through a bounded concurrency pool against a shared browser.
+
+// Build a job context from a plain options object. Fills platform from the URL.
+function makeCtx(job) {
+    const ctx = {
+        url: job.url,
+        outputDir: job.outputDir || '.',
+        quality: parseInt(job.quality != null ? job.quality : 85, 10),
+        base64Output: job.base64Output === true || job.base64Output === 'true',
+        debugMode: job.debugMode === true || job.debugMode === 'true',
+        timeoutSec: parseInt(job.timeoutSec != null ? job.timeoutSec : 60, 10),
+        jsonOutput: job.jsonOutput === true || job.jsonOutput === 'true',
+        allMode: job.allMode === true || job.allMode === 'true',
+        optimizeMode: job.optimizeMode === true || job.optimizeMode === 'true',
+        convertFormat: job.convertFormat || '',
+        verboseMode: job.verboseMode === true || job.verboseMode === 'true',
+        traceMode: job.traceMode === true || job.traceMode === 'true',
+        printUrlMode: job.printUrlMode === true || job.printUrlMode === 'true',
+        debugDir: job.debugDir || '',
+        preserveMode: job.preserveMode === true || job.preserveMode === 'true',
+        quietMode: job.quietMode === true || job.quietMode === 'true'
+    };
+    ctx.currentPlatform = detectPlatform(ctx.url || '');
+    return ctx;
+}
+
 // Parse arguments
 const args = process.argv.slice(2);
-const url = args[0];
-const outputDir = args[1] || '.';
-const quality = parseInt(args[2] || '85', 10);
-const base64Output = args[3] === 'true';
-const debugMode = args[4] === 'true';
-const timeoutSec = parseInt(args[5] || '60', 10);
-const jsonOutput = args[6] === 'true';
-const allMode = args[7] === 'true';
-const optimizeMode = args[8] === 'true';
-const convertFormat = args[9] || '';  // 'jpeg', 'png', 'webp', or ''
-const verboseMode = args[10] === 'true';
-const traceMode = args[11] === 'true';
-const printUrlMode = args[12] === 'true';
-const debugDir = args[13] || '';
-const preserveMode = args[14] === 'true';  // v3.0+: skip MozJPEG compression, keep original bytes
-const quietMode = args[15] === 'true';     // Suppress progress messages
 
-// Verbose logging helper (only logs if not in quiet mode)
-function verbose(msg) {
-    if (verboseMode && !quietMode) console.error(`[giil] ${msg}`);
+// Batch mode: `node extractor.mjs --batch <jobsFile>` reads a JSON array of job
+// objects and runs them all over a single launched browser (issue #4).
+const batchMode = args[0] === '--batch';
+const batchFile = batchMode ? args[1] : null;
+// Optional concurrency cap as the 3rd arg; defaults to 3 in-flight contexts.
+const batchConcurrency = batchMode ? Math.max(1, parseInt(args[2] || '3', 10) || 3) : 1;
+
+// Verbose logging helper (only logs if not in quiet mode). Reads from a ctx so
+// concurrent jobs honour their own --verbose/--quiet flags.
+function verbose(ctx, msg) {
+    if (ctx && ctx.verboseMode && !ctx.quietMode) console.error(`[giil] ${msg}`);
 }
 
 // Info logging helper (respects quiet mode)
-function logInfo(msg) {
-    if (!quietMode) console.error(`[giil] ${msg}`);
+function logInfo(ctx, msg) {
+    if (!(ctx && ctx.quietMode)) console.error(`[giil] ${msg}`);
 }
 
-if (!url) {
+if (!batchMode && !args[0]) {
     console.error('Usage: node extractor.mjs <url> <outputDir> <quality> <base64> <debug> <timeout> <json> <all> <optimize> <convert> <verbose> <trace> <printUrl> <debugDir> <preserve> <quiet>');
+    console.error('   or: node extractor.mjs --batch <jobsFile.json> [concurrency]');
     process.exit(ExitCodes.USAGE_ERROR);
+}
+
+// Build the single-URL context from positional argv (back-compat path).
+function ctxFromArgv() {
+    return makeCtx({
+        url: args[0],
+        outputDir: args[1] || '.',
+        quality: args[2] || '85',
+        base64Output: args[3] === 'true',
+        debugMode: args[4] === 'true',
+        timeoutSec: args[5] || '60',
+        jsonOutput: args[6] === 'true',
+        allMode: args[7] === 'true',
+        optimizeMode: args[8] === 'true',
+        convertFormat: args[9] || '',
+        verboseMode: args[10] === 'true',
+        traceMode: args[11] === 'true',
+        printUrlMode: args[12] === 'true',
+        debugDir: args[13] || '',
+        preserveMode: args[14] === 'true',
+        quietMode: args[15] === 'true'
+    });
 }
 
 // Helper: sleep
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Helper: short random token to disambiguate temp filenames across concurrent
+// jobs that may share an output directory in --batch mode (issue #4).
+let _tokenSeq = 0;
+function uniqueToken() {
+    _tokenSeq = (_tokenSeq + 1) >>> 0;
+    return `${process.pid}_${_tokenSeq}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 // Helper: format date for filename (YYYYMMDD_HHMMSS)
 function formatDateForFilename(date) {
@@ -1382,8 +1457,9 @@ function detectPlatform(urlStr) {
     return 'unknown';
 }
 
-// Current platform (detected from input URL)
-const currentPlatform = detectPlatform(url);
+// NOTE: the active platform now lives on each job's `ctx.currentPlatform`
+// (set by makeCtx). There is no module-level `currentPlatform` so that
+// concurrent jobs in a shared browser don't clobber one another (issue #4).
 
 // -----------------------------------------------------------------------------
 // Google Photos URL Helpers (v3.0+)
@@ -1414,7 +1490,7 @@ function extractGooglePhotosBaseUrl(cdnUrl) {
  * @param {string} cdnUrl - The captured CDN URL
  * @returns {Promise<{buffer: Buffer, url: string}|null>} Buffer and URL or null if failed
  */
-async function downloadGooglePhotosFullRes(cdnUrl) {
+async function downloadGooglePhotosFullRes(ctx, cdnUrl) {
     const { fullResUrl } = extractGooglePhotosBaseUrl(cdnUrl);
 
     try {
@@ -1431,7 +1507,7 @@ async function downloadGooglePhotosFullRes(cdnUrl) {
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
-        logInfo(`Downloaded Google Photos full-res: ${(buffer.length / 1024).toFixed(1)} KB`);
+        logInfo(ctx, `Downloaded Google Photos full-res: ${(buffer.length / 1024).toFixed(1)} KB`);
         return { buffer, url: fullResUrl };
     } catch (e) {
         console.error(`[giil] Google Photos download error: ${e.message}`);
@@ -1503,13 +1579,13 @@ function detectDownloadKind(buffer, suggestedName = '') {
 // the Sharp image pipeline. Used for Google Photos native downloads of videos
 // and multi-item ZIP archives. Emits the same path / JSON contract as
 // processAndSaveImage so the bash wrapper and --format consumers work unchanged.
-function saveOriginalDownload(buffer, options) {
+function saveOriginalDownload(ctx, buffer, options) {
     const { outputDir, jsonOutput, base64Output, captureMethod, sourceUrl, index, ext, kind } = options;
 
     if (base64Output) {
         // base64 of a binary original (video/zip) is still valid output.
         if (jsonOutput) {
-            const result = formatJsonSuccess({
+            const result = formatJsonSuccess(ctx, {
                 base64: buffer.toString('base64'),
                 datetime: formatDateForJson(new Date()),
                 method: captureMethod,
@@ -1520,19 +1596,19 @@ function saveOriginalDownload(buffer, options) {
         } else {
             console.log(buffer.toString('base64'));
         }
-        logInfo(`✓ Output: base64 ${kind} (${(buffer.length / 1024).toFixed(1)} KB)`);
+        logInfo(ctx, `✓ Output: base64 ${kind} (${(buffer.length / 1024).toFixed(1)} KB)`);
         return { outputPath: null, captureDate: new Date(), metadata: null };
     }
 
     const dateStr = formatDateForFilename(new Date());
-    const { outputPath } = getUniqueFilename(outputDir, dateStr, index ?? null, ext, currentPlatform);
+    const { outputPath } = getUniqueFilename(outputDir, dateStr, index ?? null, ext, ctx.currentPlatform);
     writeFileSync(outputPath, buffer);
 
     if (jsonOutput) {
-        const result = formatJsonSuccess({
+        const result = formatJsonSuccess(ctx, {
             path: outputPath,
             datetime: formatDateForJson(new Date()),
-            sourceUrl: sourceUrl || url,
+            sourceUrl: sourceUrl || ctx.url,
             method: captureMethod,
             size: buffer.length,
             media_kind: kind,
@@ -1542,7 +1618,7 @@ function saveOriginalDownload(buffer, options) {
     } else {
         console.log(outputPath);
     }
-    logInfo(`✓ Saved: ${outputPath} (${(buffer.length / 1024).toFixed(1)} KB, ${kind}, ${captureMethod})`);
+    logInfo(ctx, `✓ Saved: ${outputPath} (${(buffer.length / 1024).toFixed(1)} KB, ${kind}, ${captureMethod})`);
     return { outputPath, captureDate: new Date(), metadata: null };
 }
 
@@ -1554,7 +1630,7 @@ function saveOriginalDownload(buffer, options) {
 //   - multi-select / album -> a .zip archive of all originals
 // The =s0 CDN trick only ever yields a re-encoded preview (image-only, ~75MP cap)
 // and is kept as a fallback. Returns { buffer, suggestedName } or null.
-async function tryGooglePhotosNativeDownload(page, outputDir, timeoutMs) {
+async function tryGooglePhotosNativeDownload(ctx, page, outputDir, timeoutMs) {
     const dlTimeout = Math.min(Math.max(timeoutMs, 15000), 120000);
     try {
         // Focus the document body so the shortcut is delivered to the viewer.
@@ -1570,7 +1646,9 @@ async function tryGooglePhotosNativeDownload(page, outputDir, timeoutMs) {
 
         const suggestedName = download.suggestedFilename() || 'gphotos_original';
         const safeName = basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_');
-        const tmpPath = join(outputDir, `_temp_${Date.now()}_${safeName}`);
+        // Random suffix keeps temp paths unique even when several batch jobs
+        // share one outputDir and write within the same millisecond.
+        const tmpPath = join(outputDir, `_temp_${Date.now()}_${uniqueToken()}_${safeName}`);
         await download.saveAs(tmpPath);
         const buffer = readFileSync(tmpPath);
         try { unlinkSync(tmpPath); } catch (e) {}
@@ -1578,7 +1656,7 @@ async function tryGooglePhotosNativeDownload(page, outputDir, timeoutMs) {
         if (!buffer || buffer.length < 1) return null;
         return { buffer, suggestedName: safeName, url: download.url() };
     } catch (e) {
-        verbose(`Google Photos Shift+D download did not fire: ${e.message}`);
+        verbose(ctx, `Google Photos Shift+D download did not fire: ${e.message}`);
         return null;
     }
 }
@@ -1739,7 +1817,7 @@ function validateGoogleDriveResponse(buffer) {
  * @param {boolean} debugMode - Debug logging
  * @returns {Promise<Object|null>} Capture result or null
  */
-async function captureGoogleDrive(page, fileId, debugMode) {
+async function captureGoogleDrive(ctx, page, fileId, debugMode) {
     // TIER 1: Download button
     if (debugMode) console.error('[giil:debug] GDrive: Trying download button...');
     try {
@@ -1752,7 +1830,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
                 const path = await dl.path();
                 if (path) {
                     const buf = readFileSync(path);
-                    logInfo('GDrive download: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                    logInfo(ctx, 'GDrive download: ' + (buf.length / 1024).toFixed(1) + ' KB');
                     return { bytes: buf, method: 'download-button', tier: 1, sourceUrl: getGoogleDriveViewerUrl(fileId) };
                 }
             }
@@ -1767,7 +1845,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
         if (res.ok && (res.headers.get('content-type') || '').startsWith('image/')) {
             const buf = Buffer.from(await res.arrayBuffer());
             if (!validateGoogleDriveResponse(buf).isError) {
-                logInfo('GDrive direct: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                logInfo(ctx, 'GDrive direct: ' + (buf.length / 1024).toFixed(1) + ' KB');
                 return { bytes: buf, method: 'direct-url', tier: 2, sourceUrl: url };
             }
         }
@@ -1781,7 +1859,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
         if (res.ok) {
             const buf = Buffer.from(await res.arrayBuffer());
             if (validateMagicBytes(buf).isImage) {
-                logInfo('GDrive thumbnail: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                logInfo(ctx, 'GDrive thumbnail: ' + (buf.length / 1024).toFixed(1) + ' KB');
                 return { bytes: buf, method: 'thumbnail', tier: 3, sourceUrl: url, isPreview: true };
             }
         }
@@ -1796,7 +1874,7 @@ async function captureGoogleDrive(page, fileId, debugMode) {
                 const box = await el.boundingBox();
                 if (box && box.width > 100 && box.height > 100) {
                     const buf = await el.screenshot({ type: 'png' });
-                    verbose('GDrive element screenshot: ' + (buf.length / 1024).toFixed(1) + ' KB');
+                    verbose(ctx, 'GDrive element screenshot: ' + (buf.length / 1024).toFixed(1) + ' KB');
                     return { bytes: buf, method: 'element-screenshot', tier: 4, sourceUrl: getGoogleDriveViewerUrl(fileId) };
                 }
             }
@@ -1810,21 +1888,21 @@ async function captureGoogleDrive(page, fileId, debugMode) {
 
 // v3 JSON Schema Helper: format success output
 // Wraps all output with schema_version, ok, and platform fields
-function formatJsonSuccess(data) {
+function formatJsonSuccess(ctx, data) {
     return {
         schema_version: '1',
         ok: true,
-        platform: currentPlatform,
+        platform: ctx.currentPlatform,
         ...data
     };
 }
 
 // v3 JSON Schema Helper: format error output
-function formatJsonError(code, message, remediation = null) {
+function formatJsonError(ctx, code, message, remediation = null) {
     const result = {
         schema_version: '1',
         ok: false,
-        platform: currentPlatform,
+        platform: ctx.currentPlatform,
         error: {
             code: code,
             message: message
@@ -2041,7 +2119,7 @@ function getUniqueFilename(outputDir, dateStr, index = null, ext = 'jpg', platfo
 
 // Process a single image buffer and save/output it
 // Default: MozJPEG compression for optimal size/quality. Use --preserve to keep original bytes.
-async function processAndSaveImage(buffer, options) {
+async function processAndSaveImage(ctx, buffer, options) {
     const {
         outputDir, quality, base64Output, jsonOutput,
         captureMethod, sourceUrl, downloadedFilePath, index,
@@ -2064,14 +2142,14 @@ async function processAndSaveImage(buffer, options) {
         originalFormat = metadata.format;
     } catch (sharpError) {
         // Sharp can't read the format - likely HEIC/HEIF, need to convert
-        const tempJpeg = join(outputDir, `_temp_converted_${Date.now()}.jpg`);
+        const tempJpeg = join(outputDir, `_temp_converted_${Date.now()}_${uniqueToken()}.jpg`);
         let didConvert = false;
         let tempInput = null;
 
         if (downloadedFilePath && existsSync(downloadedFilePath)) {
             didConvert = convertHeicWithSystemTools(downloadedFilePath, tempJpeg);
         } else {
-            tempInput = join(outputDir, `_temp_input_${Date.now()}.heic`);
+            tempInput = join(outputDir, `_temp_input_${Date.now()}_${uniqueToken()}.heic`);
             try {
                 writeFileSync(tempInput, buffer);
                 didConvert = convertHeicWithSystemTools(tempInput, tempJpeg);
@@ -2087,7 +2165,7 @@ async function processAndSaveImage(buffer, options) {
         if (didConvert && existsSync(tempJpeg)) {
             processableBuffer = readFileSync(tempJpeg);
             try { unlinkSync(tempJpeg); } catch (e) {}
-            verbose('Converted HEIC using system tools');
+            verbose(ctx, 'Converted HEIC using system tools');
             // Re-read metadata from converted buffer
             metadata = await sharp(processableBuffer).metadata();
             originalFormat = 'heic';  // Remember original was HEIC
@@ -2100,7 +2178,7 @@ async function processAndSaveImage(buffer, options) {
         }
     }
 
-    logInfo(`Image: ${metadata.width}x${metadata.height}, ${metadata.format || originalFormat || 'unknown'}`);
+    logInfo(ctx, `Image: ${metadata.width}x${metadata.height}, ${metadata.format || originalFormat || 'unknown'}`);
 
     // Use current time if no EXIF date
     if (!captureDate) {
@@ -2123,15 +2201,15 @@ async function processAndSaveImage(buffer, options) {
                 chromaSubsampling: '4:2:0'
             });
             outputExt = 'jpg';
-            verbose(`MozJPEG compression (quality ${quality})`);
+            verbose(ctx, `MozJPEG compression (quality ${quality})`);
         } else if (convert === 'png') {
             pipeline = pipeline.png({ compressionLevel: 9 });
             outputExt = 'png';
-            verbose('PNG conversion');
+            verbose(ctx, 'PNG conversion');
         } else if (convert === 'webp') {
             pipeline = pipeline.webp({ quality: quality });
             outputExt = 'webp';
-            verbose(`WebP conversion (quality ${quality})`);
+            verbose(ctx, `WebP conversion (quality ${quality})`);
         }
 
         processedBuffer = await pipeline.toBuffer();
@@ -2140,13 +2218,13 @@ async function processAndSaveImage(buffer, options) {
         processedBuffer = processableBuffer;
         // Normalize 'jpeg' to 'jpg' for consistent extension naming
         outputExt = metadata.format === 'jpeg' ? 'jpg' : (metadata.format || 'jpg');
-        verbose('Preserving original bytes');
+        verbose(ctx, 'Preserving original bytes');
     }
 
     // Generate filename with datetime (v3: use outputExt for format-aware filenames)
     // v3.0.1: Pass platform for platform-specific filename prefix
     const dateStr = formatDateForFilename(captureDate);
-    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index, outputExt, currentPlatform);
+    const { filename, outputPath } = getUniqueFilename(outputDir, dateStr, index, outputExt, ctx.currentPlatform);
 
     // Clean up temp downloaded file
     if (downloadedFilePath && existsSync(downloadedFilePath)) {
@@ -2157,7 +2235,7 @@ async function processAndSaveImage(buffer, options) {
     if (base64Output) {
         if (jsonOutput) {
             // v3 JSON format with schema_version, ok, platform
-            const result = formatJsonSuccess({
+            const result = formatJsonSuccess(ctx, {
                 base64: processedBuffer.toString('base64'),
                 datetime: formatDateForJson(captureDate),
                 method: captureMethod,
@@ -2167,16 +2245,16 @@ async function processAndSaveImage(buffer, options) {
         } else {
             console.log(processedBuffer.toString('base64'));
         }
-        logInfo(`✓ Output: base64 (${(processedBuffer.length / 1024).toFixed(1)} KB)`);
+        logInfo(ctx, `✓ Output: base64 (${(processedBuffer.length / 1024).toFixed(1)} KB)`);
     } else {
         writeFileSync(outputPath, processedBuffer);
 
         if (jsonOutput) {
             // v3 JSON format with schema_version, ok, platform
-            const result = formatJsonSuccess({
+            const result = formatJsonSuccess(ctx, {
                 path: outputPath,
                 datetime: formatDateForJson(captureDate),
-                sourceUrl: sourceUrl || url,
+                sourceUrl: sourceUrl || ctx.url,
                 method: captureMethod,
                 size: processedBuffer.length,
                 width: metadata.width,
@@ -2187,7 +2265,7 @@ async function processAndSaveImage(buffer, options) {
         } else {
             console.log(outputPath);
         }
-        logInfo(`✓ Saved: ${outputPath} (${(processedBuffer.length / 1024).toFixed(1)} KB, ${captureMethod})`);
+        logInfo(ctx, `✓ Saved: ${outputPath} (${(processedBuffer.length / 1024).toFixed(1)} KB, ${captureMethod})`);
     }
 
     return { outputPath, captureDate, metadata };
@@ -2195,7 +2273,7 @@ async function processAndSaveImage(buffer, options) {
 
 // Capture a single photo from the current page state
 // Uses pre-captured images from imageCapture if available
-async function captureSinglePhoto(page, context, options, imageCapture = null) {
+async function captureSinglePhoto(ctx, page, context, options, imageCapture = null) {
     const { outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs, index } = options;
 
     // Use pre-captured images or start fresh tracking
@@ -2224,26 +2302,26 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // ever yield a re-encoded preview or, for videos, a poster-frame image. We
     // try the native download first and, for non-image originals (video/zip),
     // save them directly instead of silently degrading to a screenshot.
-    if (currentPlatform === 'gphotos' && !options.skipDownloadButton) {
-        verbose('Trying Google Photos native download (Shift+D)...');
-        const native = await tryGooglePhotosNativeDownload(page, outputDir, timeoutMs);
+    if (ctx.currentPlatform === 'gphotos' && !options.skipDownloadButton) {
+        verbose(ctx, 'Trying Google Photos native download (Shift+D)...');
+        const native = await tryGooglePhotosNativeDownload(ctx, page, outputDir, timeoutMs);
         if (native && native.buffer && native.buffer.length >= 1000) {
             const { kind, ext } = detectDownloadKind(native.buffer, native.suggestedName);
             if (kind === 'video' || kind === 'zip') {
                 // Non-image original: save raw bytes, bypassing the image pipeline.
-                logInfo(`Google Photos original ${kind}: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
-                return saveOriginalDownload(native.buffer, {
+                logInfo(ctx, `Google Photos original ${kind}: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
+                return saveOriginalDownload(ctx, native.buffer, {
                     outputDir, jsonOutput, base64Output,
-                    captureMethod: 'download', sourceUrl: native.url || url,
+                    captureMethod: 'download', sourceUrl: native.url || ctx.url,
                     index, ext, kind
                 });
             }
             // Image original: feed through the normal pipeline so EXIF/--preserve/
             // --convert/compression all behave consistently.
-            logInfo(`Google Photos original image: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
+            logInfo(ctx, `Google Photos original image: ${(native.buffer.length / 1024).toFixed(1)} KB (${native.suggestedName})`);
             finalBuffer = native.buffer;
             captureMethod = 'download';
-            sourceUrl = native.url || url;
+            sourceUrl = native.url || ctx.url;
         }
     }
 
@@ -2251,7 +2329,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 1: Click Download button
     // ========================================
     if (!finalBuffer && !options.skipDownloadButton) {
-        verbose('Trying download button...');
+        verbose(ctx, 'Trying download button...');
         const downloadSelectors = [
             'button[aria-label="Download"]',
             'button[title="Download"]',
@@ -2281,12 +2359,12 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
                 if (download) {
                     const suggestedName = download.suggestedFilename() || 'icloud_download';
                     const safeName = basename(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_');
-                    downloadedFilePath = join(outputDir, `_temp_${Date.now()}_${safeName}`);
+                    downloadedFilePath = join(outputDir, `_temp_${Date.now()}_${uniqueToken()}_${safeName}`);
                     await download.saveAs(downloadedFilePath);
                     finalBuffer = readFileSync(downloadedFilePath);
                     captureMethod = 'download';
                     sourceUrl = download.url();
-                    logInfo(`Downloaded: ${suggestedName}`);
+                    logInfo(ctx, `Downloaded: ${suggestedName}`);
                     break;
                 }
             } catch (e) {
@@ -2304,26 +2382,26 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     if (!finalBuffer && bestImageBuffer && bestImageSize > 10000) {
         // For Google Photos, try to download full-resolution using =s0 modifier
         if (bestImageUrl && bestImageUrl.includes('googleusercontent.com/')) {
-            verbose('Google Photos detected, trying full-resolution download...');
-            const fullResResult = await downloadGooglePhotosFullRes(bestImageUrl);
+            verbose(ctx, 'Google Photos detected, trying full-resolution download...');
+            const fullResResult = await downloadGooglePhotosFullRes(ctx, bestImageUrl);
             if (fullResResult && fullResResult.buffer) {
                 finalBuffer = fullResResult.buffer;
                 captureMethod = 'url-extraction';
                 sourceUrl = fullResResult.url;
-                logInfo(`Google Photos full-res: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
+                logInfo(ctx, `Google Photos full-res: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
             } else {
                 // Fall back to captured preview
                 finalBuffer = bestImageBuffer;
                 captureMethod = 'network';
                 sourceUrl = bestImageUrl;
-                logInfo(`Using Google Photos preview: ${(bestImageSize / 1024).toFixed(1)} KB`);
+                logInfo(ctx, `Using Google Photos preview: ${(bestImageSize / 1024).toFixed(1)} KB`);
             }
         } else {
             // Standard CDN capture (iCloud, etc.)
             finalBuffer = bestImageBuffer;
             captureMethod = 'network';
             sourceUrl = bestImageUrl;
-            logInfo(`Captured from CDN: ${(bestImageSize / 1024).toFixed(1)} KB`);
+            logInfo(ctx, `Captured from CDN: ${(bestImageSize / 1024).toFixed(1)} KB`);
         }
     }
 
@@ -2331,7 +2409,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 3: Screenshot image element
     // ========================================
     if (!finalBuffer) {
-        verbose('Trying element screenshot...');
+        verbose(ctx, 'Trying element screenshot...');
         const imgSelectors = [
             // iCloud selectors
             'img[src*="cvws.icloud-content"]',
@@ -2363,7 +2441,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
                     if (box && box.width > 100 && box.height > 100) {
                         finalBuffer = await imgElement.screenshot({ type: 'png' });
                         captureMethod = 'element-screenshot';
-                        verbose(`Screenshot: ${selector}`);
+                        verbose(ctx, `Screenshot: ${selector}`);
                         break;
                     }
                 }
@@ -2375,7 +2453,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // STRATEGY 4: Viewport screenshot (last resort)
     // ========================================
     if (!finalBuffer) {
-        verbose('Taking viewport screenshot (fallback)...');
+        verbose(ctx, 'Taking viewport screenshot (fallback)...');
         finalBuffer = await page.screenshot({ type: 'png', fullPage: false });
         captureMethod = 'viewport-screenshot';
     }
@@ -2389,7 +2467,7 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     // a video but we never got the native download and have fallen back to a
     // screenshot, we'd otherwise save a poster frame of the first video frame.
     // That is exactly the bug reported in #2 (video -> .jpg screenshot). Refuse.
-    if (currentPlatform === 'gphotos' && imageCapture && imageCapture.sawVideo &&
+    if (ctx.currentPlatform === 'gphotos' && imageCapture && imageCapture.sawVideo &&
         (captureMethod === 'element-screenshot' || captureMethod === 'viewport-screenshot')) {
         const err = new Error(
             'Google Photos item is a video and the original could not be downloaded. ' +
@@ -2415,8 +2493,8 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
     }
 
     // Process and save
-    verbose('Processing image...');
-    return await processAndSaveImage(finalBuffer, {
+    verbose(ctx, 'Processing image...');
+    return await processAndSaveImage(ctx, finalBuffer, {
         outputDir,
         quality,
         base64Output,
@@ -2425,8 +2503,8 @@ async function captureSinglePhoto(page, context, options, imageCapture = null) {
         sourceUrl,
         downloadedFilePath,
         index,
-        preserve: preserveMode,
-        convert: convertFormat
+        preserve: ctx.preserveMode,
+        convert: ctx.convertFormat
     });
 }
 
@@ -2531,20 +2609,26 @@ function resetImageCapture(capture) {
 }
 
 // Main extraction function
-async function extractImage() {
-    verbose(`Platform detected: ${detectPlatform(url)}`);
-    verbose('Launching Playwright (headless)');
+// Extract image(s) for a single job (`ctx`) using a SHARED, already-launched
+// `browser`. Each call gets its OWN BrowserContext (isolated cookies/storage/
+// downloads) and page, so many jobs can run concurrently against one browser
+// (issue #4). The browser lifecycle (launch/close) is owned by the caller.
+//
+// Returns an object describing the outcome so the batch driver can aggregate
+// per-job success/failure without any job aborting the others:
+//   { ok: true, results: [...] }            normal success
+//   { ok: true, printUrl: <url|null> }      --print-url result (no download)
+// Throws on hard failure (the driver/single-URL wrapper maps it to an exit code).
+async function extractImage(ctx, browser) {
+    const {
+        url, outputDir, quality, base64Output, debugMode, timeoutSec,
+        jsonOutput, allMode, traceMode, printUrlMode, debugDir,
+        preserveMode, convertFormat, currentPlatform
+    } = ctx;
 
-    const browser = await chromium.launch({
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-web-security'
-        ]
-    });
+    verbose(ctx, `Platform detected: ${currentPlatform}`);
 
+    // Per-job isolated context: separate cookie jar / storage / download dir.
     const context = await browser.newContext({
         viewport: { width: 1920, height: 1080 },
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -2556,8 +2640,9 @@ async function extractImage() {
     if (traceMode) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
         const traceDir = debugDir || outputDir || '.';
-        tracePath = join(traceDir, `giil_trace_${timestamp}.zip`);
-        verbose(`Playwright tracing enabled, will save to: ${tracePath}`);
+        // uniqueToken keeps concurrent traces from colliding on the same path.
+        tracePath = join(traceDir, `giil_trace_${timestamp}_${uniqueToken()}.zip`);
+        verbose(ctx, `Playwright tracing enabled, will save to: ${tracePath}`);
         await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     }
 
@@ -2568,11 +2653,11 @@ async function extractImage() {
     // Set up image capture handler BEFORE navigation
     const { capture: imageCapture, handler: responseHandler } = createImageCaptureHandler(debugMode);
     page.on('response', responseHandler);
-    verbose('Network interceptor installed');
+    verbose(ctx, 'Network interceptor installed');
 
     try {
         // Navigate to page
-        logInfo(`Loading: ${url}`);
+        logInfo(ctx, `Loading: ${url}`);
         await page.goto(url, {
             waitUntil: 'domcontentloaded',
             timeout: timeoutMs
@@ -2593,14 +2678,14 @@ async function extractImage() {
         const settleTimeout = Math.min(timeoutMs, 30000);
         await page.waitForLoadState('networkidle', { timeout: settleTimeout }).catch(() => {});
         await sleep(1000);
-        verbose('Page load complete, network idle');
+        verbose(ctx, 'Page load complete, network idle');
 
         // --print-url mode: extract and output URL, don't download
         if (printUrlMode) {
             const capturedUrl = imageCapture.url;
-            const platform = detectPlatform(url);
+            const platform = currentPlatform;
 
-            verbose(`Captured URL: ${capturedUrl || 'none'}`);
+            verbose(ctx, `Captured URL: ${capturedUrl || 'none'}`);
 
             if (capturedUrl) {
                 if (jsonOutput) {
@@ -2608,10 +2693,15 @@ async function extractImage() {
                 } else {
                     console.log(capturedUrl);
                 }
-                process.exit(ExitCodes.SUCCESS);
+                // Don't process.exit() here: in --batch mode that would kill
+                // sibling jobs. Return a signal and let the caller decide.
+                return { ok: true, printUrl: capturedUrl };
             } else {
                 console.error('[giil] No direct URL captured (page may require interaction)');
-                process.exit(ExitCodes.CAPTURE_FAILURE);
+                const err = new Error('No direct URL captured');
+                err.code = 'CAPTURE_FAILURE';
+                err.exitCode = ExitCodes.CAPTURE_FAILURE;
+                throw err;
             }
         }
 
@@ -2619,39 +2709,39 @@ async function extractImage() {
             // ========================================
             // ALL MODE: Download every photo in album
             // ========================================
-            logInfo('Album mode: finding all photos...');
+            logInfo(ctx, 'Album mode: finding all photos...');
 
             // Google Photos: prefer the native album download. On a shared-album
             // page, Shift+D (with nothing selected) downloads the WHOLE album as a
             // single .zip of original files — far better than per-thumbnail
             // previews. Fall through to the legacy path only if it doesn't fire.
             if (currentPlatform === 'gphotos') {
-                verbose('Album mode: trying Google Photos native album download (Shift+D)...');
-                const nativeAlbum = await tryGooglePhotosNativeDownload(page, outputDir, timeoutMs);
+                verbose(ctx, 'Album mode: trying Google Photos native album download (Shift+D)...');
+                const nativeAlbum = await tryGooglePhotosNativeDownload(ctx, page, outputDir, timeoutMs);
                 if (nativeAlbum && nativeAlbum.buffer && nativeAlbum.buffer.length >= 1000) {
                     const { kind, ext } = detectDownloadKind(nativeAlbum.buffer, nativeAlbum.suggestedName);
                     if (kind === 'zip' || kind === 'video') {
-                        logInfo(`Google Photos album archive: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
-                        const result = saveOriginalDownload(nativeAlbum.buffer, {
+                        logInfo(ctx, `Google Photos album archive: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
+                        const result = saveOriginalDownload(ctx, nativeAlbum.buffer, {
                             outputDir, jsonOutput, base64Output,
                             captureMethod: 'download', sourceUrl: nativeAlbum.url || url,
                             ext, kind
                         });
                         results.push(result);
-                        // `return` still runs the finally block (browser close + trace save).
-                        return results;
+                        // `return` still runs the finally block (context close + trace save).
+                        return { ok: true, results };
                     }
                     // A single-image original means the "album" was really one photo.
-                    logInfo(`Google Photos original image: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
-                    const result = await processAndSaveImage(nativeAlbum.buffer, {
+                    logInfo(ctx, `Google Photos original image: ${(nativeAlbum.buffer.length / 1024).toFixed(1)} KB (${nativeAlbum.suggestedName})`);
+                    const result = await processAndSaveImage(ctx, nativeAlbum.buffer, {
                         outputDir, quality, base64Output, jsonOutput,
                         captureMethod: 'download', sourceUrl: nativeAlbum.url || url,
                         downloadedFilePath: null, preserve: preserveMode, convert: convertFormat
                     });
                     results.push(result);
-                    return results;
+                    return { ok: true, results };
                 }
-                verbose('Native album download did not fire; falling back to per-item capture');
+                verbose(ctx, 'Native album download did not fire; falling back to per-item capture');
             }
 
             // Find thumbnail elements (platform-aware selectors)
@@ -2684,7 +2774,7 @@ async function extractImage() {
                 const found = await page.$$(sel);
                 if (found.length > thumbnails.length) {
                     thumbnails = found;
-                    verbose(`Found ${found.length} items with: ${sel}`);
+                    verbose(ctx, `Found ${found.length} items with: ${sel}`);
                 }
             }
 
@@ -2692,7 +2782,7 @@ async function extractImage() {
                 // For Google Photos: try using collected CDN URLs as fallback
                 if (currentPlatform === 'gphotos' && imageCapture.gphotoUrls.size > 0) {
                     const gphotoBaseUrls = Array.from(imageCapture.gphotoUrls);
-                    logInfo(`Using ${gphotoBaseUrls.length} collected Google Photos URLs...`);
+                    logInfo(ctx, `Using ${gphotoBaseUrls.length} collected Google Photos URLs...`);
 
                     for (let i = 0; i < gphotoBaseUrls.length; i++) {
                         try {
@@ -2701,12 +2791,12 @@ async function extractImage() {
                                 await sleep(ALBUM_DELAY_MS);
                             }
 
-                            logInfo(`\nPhoto ${i + 1}/${gphotoBaseUrls.length}...`);
-                            const fullResResult = await downloadGooglePhotosFullRes(gphotoBaseUrls[i]);
+                            logInfo(ctx, `\nPhoto ${i + 1}/${gphotoBaseUrls.length}...`);
+                            const fullResResult = await downloadGooglePhotosFullRes(ctx, gphotoBaseUrls[i]);
 
                             if (fullResResult && fullResResult.buffer) {
                                 // Process and save the image
-                                const result = await processAndSaveImage(fullResResult.buffer, {
+                                const result = await processAndSaveImage(ctx, fullResResult.buffer, {
                                     outputDir, quality, base64Output, jsonOutput,
                                     captureMethod: 'url-extraction',
                                     sourceUrl: fullResResult.url,
@@ -2723,14 +2813,14 @@ async function extractImage() {
                     }
                 } else {
                     // Fallback: treat as single photo
-                    verbose('No album thumbnails found, treating as single photo');
-                    const result = await captureSinglePhoto(page, context, {
+                    verbose(ctx, 'No album thumbnails found, treating as single photo');
+                    const result = await captureSinglePhoto(ctx, page, context, {
                         outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                     }, imageCapture);
                     results.push(result);
                 }
             } else {
-                logInfo(`Processing ${thumbnails.length} photos...`);
+                logInfo(ctx, `Processing ${thumbnails.length} photos...`);
 
                 for (let i = 0; i < thumbnails.length; i++) {
                     try {
@@ -2771,7 +2861,7 @@ async function extractImage() {
                         await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
                         // Capture this photo (use refreshed capture buffer for network fallback)
-                        const result = await captureSinglePhoto(page, context, {
+                        const result = await captureSinglePhoto(ctx, page, context, {
                             outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs,
                             index: i + 1,
                             skipDownloadButton: false
@@ -2813,7 +2903,7 @@ async function extractImage() {
                 }
             }
 
-            logInfo(`\n✓ Album complete: ${results.length} photos saved`);
+            logInfo(ctx, `\n✓ Album complete: ${results.length} photos saved`);
 
         } else {
             // ========================================
@@ -2822,7 +2912,7 @@ async function extractImage() {
 
             // Platform-specific handling for Google Drive
             if (currentPlatform === 'gdrive') {
-                verbose('Google Drive detected, using dedicated capture...');
+                verbose(ctx, 'Google Drive detected, using dedicated capture...');
 
                 // Check for auth issues first
                 const authCheck = await checkGoogleDriveAuth(page);
@@ -2842,16 +2932,16 @@ async function extractImage() {
                 // Extract file ID and use dedicated capture
                 const fileId = extractGoogleDriveFileId(url);
                 if (!fileId) {
-                    verbose('Could not extract Google Drive file ID, using generic capture');
-                    const result = await captureSinglePhoto(page, context, {
+                    verbose(ctx, 'Could not extract Google Drive file ID, using generic capture');
+                    const result = await captureSinglePhoto(ctx, page, context, {
                         outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                     }, imageCapture);
                     results.push(result);
                 } else {
-                    const gdriveResult = await captureGoogleDrive(page, fileId, debugMode);
+                    const gdriveResult = await captureGoogleDrive(ctx, page, fileId, debugMode);
                     if (gdriveResult && gdriveResult.bytes) {
                         // Process and save the captured image
-                        const result = await processAndSaveImage(gdriveResult.bytes, {
+                        const result = await processAndSaveImage(ctx, gdriveResult.bytes, {
                             outputDir, quality, base64Output, jsonOutput,
                             captureMethod: gdriveResult.method,
                             sourceUrl: gdriveResult.sourceUrl,
@@ -2863,8 +2953,8 @@ async function extractImage() {
                         results.push(result);
                     } else {
                         // Fallback to generic capture if Google Drive-specific failed
-                        verbose('Google Drive capture failed, trying generic strategies...');
-                        const result = await captureSinglePhoto(page, context, {
+                        verbose(ctx, 'Google Drive capture failed, trying generic strategies...');
+                        const result = await captureSinglePhoto(ctx, page, context, {
                             outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                         }, imageCapture);
                         results.push(result);
@@ -2872,12 +2962,14 @@ async function extractImage() {
                 }
             } else {
                 // Generic capture for iCloud, Google Photos, Dropbox, etc.
-                const result = await captureSinglePhoto(page, context, {
+                const result = await captureSinglePhoto(ctx, page, context, {
                     outputDir, quality, base64Output, jsonOutput, debugMode, timeoutMs
                 }, imageCapture);
                 results.push(result);
             }
         }
+
+        return { ok: true, results };
 
     } catch (error) {
         console.error(`[giil] Error: ${error.message}`);
@@ -2912,14 +3004,75 @@ async function extractImage() {
             }
         }
 
-        await browser.close();
+        // Close only THIS job's context. The shared browser is owned and closed
+        // by the caller (single launch for the whole run — issue #4).
+        await context.close().catch(() => {});
     }
 }
 
-extractImage().catch(err => {
-    console.error(`[giil] Fatal: ${err.message}`);
+// -----------------------------------------------------------------------------
+// Browser lifecycle + run drivers (v3.3+ - single browser, multi-tab, issue #4)
+// -----------------------------------------------------------------------------
 
-    // Determine error code and exit code
+// Launch the ONE headless Chromium used for an entire run (all Playwright-eligible
+// URLs share it). Mirrors the args the per-URL launch used historically.
+async function launchSharedBrowser() {
+    return chromium.launch({
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-web-security'
+        ]
+    });
+}
+
+// Run an array of job contexts over a single browser with bounded concurrency.
+// Each job runs in its own BrowserContext (isolation) via extractImage(). One
+// job failing logs and is recorded but never aborts the others (per-URL error
+// isolation). Returns the worst exit code seen (0 if all succeeded).
+async function runBatch(ctxs, concurrency) {
+    const browser = await launchSharedBrowser();
+    let worstExit = ExitCodes.SUCCESS;
+    let nextIndex = 0;
+
+    const runOne = async (ctx, jobNum) => {
+        try {
+            await extractImage(ctx, browser);
+        } catch (err) {
+            // Map this job's error to an exit code, emit JSON error if requested,
+            // but keep going for the remaining URLs.
+            const { exitCode, errorCode, remediation } = classifyError(err);
+            console.error(`[giil] URL ${jobNum} failed: ${err.message}`);
+            if (ctx.jsonOutput) {
+                console.log(JSON.stringify(formatJsonError(ctx, errorCode, err.message, remediation)));
+            }
+            if (exitCode !== ExitCodes.SUCCESS) worstExit = exitCode;
+        }
+    };
+
+    const worker = async () => {
+        while (true) {
+            const i = nextIndex++;
+            if (i >= ctxs.length) return;
+            await runOne(ctxs[i], i + 1);
+        }
+    };
+
+    const pool = Math.max(1, Math.min(concurrency, ctxs.length || 1));
+    const workers = [];
+    for (let w = 0; w < pool; w++) workers.push(worker());
+    await Promise.all(workers);
+
+    await browser.close().catch(() => {});
+    return worstExit;
+}
+
+// Map an Error to { exitCode, errorCode, remediation }. Shared by the
+// single-URL wrapper and the batch per-job handler so both classify failures
+// identically (preserves the historical exit-code semantics).
+function classifyError(err) {
     let errorCode = 'CAPTURE_FAILURE';
     let exitCode = ExitCodes.CAPTURE_FAILURE;
     let remediation = null;
@@ -2931,7 +3084,7 @@ extractImage().catch(err => {
         remediation = err.remediation || null;
     } else {
         // Map common error types to exit codes
-        const msg = err.message.toLowerCase();
+        const msg = (err.message || '').toLowerCase();
         if (msg.includes('timeout') || msg.includes('net::err') || msg.includes('dns')) {
             errorCode = 'NETWORK_ERROR';
             exitCode = ExitCodes.NETWORK_ERROR;
@@ -2950,14 +3103,54 @@ extractImage().catch(err => {
             remediation = 'giil only supports image files, not videos or documents.';
         }
     }
+    return { exitCode, errorCode, remediation };
+}
 
-    // Output JSON error if --json mode is enabled
-    if (jsonOutput) {
-        const jsonError = formatJsonError(errorCode, err.message, remediation);
-        console.log(JSON.stringify(jsonError));
+// Single-URL run: one browser, one job. Preserves the original exit-code and
+// JSON-error behavior exactly (this is the back-compat positional-args path).
+async function runSingle(ctx) {
+    const browser = await launchSharedBrowser();
+    try {
+        await extractImage(ctx, browser);
+    } catch (err) {
+        console.error(`[giil] Fatal: ${err.message}`);
+        const { exitCode, errorCode, remediation } = classifyError(err);
+        if (ctx.jsonOutput) {
+            console.log(JSON.stringify(formatJsonError(ctx, errorCode, err.message, remediation)));
+        }
+        await browser.close().catch(() => {});
+        process.exit(exitCode);
     }
+    await browser.close().catch(() => {});
+}
 
-    process.exit(exitCode);
+// -----------------------------------------------------------------------------
+// Entrypoint: single-URL (positional argv) or --batch (JSON job array).
+// -----------------------------------------------------------------------------
+(async () => {
+    if (batchMode) {
+        // Read the JSON job array written by the bash layer.
+        let jobs;
+        try {
+            jobs = JSON.parse(readFileSync(batchFile, 'utf8'));
+        } catch (e) {
+            console.error(`[giil] Failed to read batch jobs file: ${e.message}`);
+            process.exit(ExitCodes.INTERNAL_ERROR);
+        }
+        if (!Array.isArray(jobs) || jobs.length === 0) {
+            console.error('[giil] Batch jobs file must be a non-empty JSON array');
+            process.exit(ExitCodes.USAGE_ERROR);
+        }
+        const ctxs = jobs.map(makeCtx);
+        const worstExit = await runBatch(ctxs, batchConcurrency);
+        process.exit(worstExit);
+    } else {
+        await runSingle(ctxFromArgv());
+        process.exit(ExitCodes.SUCCESS);
+    }
+})().catch(err => {
+    console.error(`[giil] Fatal: ${err && err.message ? err.message : err}`);
+    process.exit(ExitCodes.INTERNAL_ERROR);
 });
 SCRIPT_EOF
 
@@ -3303,77 +3496,183 @@ main() {
         log_info "Album mode: downloading all photos"
     fi
 
-    # Process every URL in turn. Each iteration sets `URL` (the global the
-    # platform-dispatch and extractor helpers read) so the per-URL handlers
-    # remain single-URL-shaped — no need to thread an array through every
-    # downstream call. (#3)
+    # Split the URL list into the Dropbox fast path (direct curl, NO browser)
+    # and the Playwright-eligible platforms (iCloud / Google Photos / Drive /
+    # unknown). The Playwright URLs are batched into ONE extractor.mjs run that
+    # reuses a SINGLE headless browser across multiple isolated tabs/contexts,
+    # instead of launching one Chromium per URL (issue #4). Dropbox keeps its
+    # separate, faster non-browser path. Order within each group is preserved.
     local _giil_url_total=${#URLS[@]}
-    local _giil_url_index=0
-    for URL in "${URLS[@]}"; do
-        _giil_url_index=$((_giil_url_index + 1))
+    local -a _pw_urls=()
+    local -a _dropbox_urls=()
+    local _u _plat
+    for _u in "${URLS[@]}"; do
+        _plat=$(detect_platform "$_u")
+        if [[ "$_plat" == "dropbox" ]]; then
+            _dropbox_urls+=("$_u")
+        else
+            _pw_urls+=("$_u")
+        fi
+    done
+
+    # ---- Dropbox URLs: direct download, one at a time (no browser) ----
+    # download_dropbox_direct reads the global URL and calls `exit` on success,
+    # so for >1 total URL run it in a subshell to survive that exit (matches the
+    # prior multi-URL behavior). For a lone Dropbox URL keep the direct exit.
+    local _dbx_index=0
+    for URL in "${_dropbox_urls[@]}"; do
+        _dbx_index=$((_dbx_index + 1))
         if [[ $_giil_url_total -gt 1 ]]; then
-            log_info "Processing URL $_giil_url_index of $_giil_url_total"
+            log_info "Dropbox URL $_dbx_index of ${#_dropbox_urls[@]} (direct download)"
+            ( download_dropbox_direct ) || log_warn "Dropbox URL $_dbx_index failed"
+        else
+            download_dropbox_direct
+        fi
+    done
+
+    # ---- Playwright URLs: single browser, multi-tab batch (issue #4) ----
+    if [[ ${#_pw_urls[@]} -gt 0 ]]; then
+        log_step "Checking dependencies..."
+        ensure_node
+        ensure_playwright
+
+        local script_path
+        script_path=$(create_extractor_script)
+
+        if [[ "$ALL_MODE" == "true" ]]; then
+            log_step "Extracting album..."
+        else
+            log_step "Extracting image(s)..."
         fi
 
-    # Detect platform and use appropriate strategy (v3.0+)
-    local platform
-    platform=$(detect_platform "$URL")
-    log_debug "Detected platform: $platform"
+        log_debug "Playwright URLs: ${#_pw_urls[@]}"
+        log_debug "Output: $OUTPUT_DIR"
+        log_debug "Quality: $QUALITY"
+        log_debug "Timeout: ${TIMEOUT}s"
+        log_debug "Output format: $OUTPUT_FORMAT (source: ${OUTPUT_FORMAT_SOURCE:-default})"
+        log_debug "JSON output: $JSON_OUTPUT"
+        log_debug "All mode: $ALL_MODE"
+        log_debug "Convert: ${CONVERT_FORMAT:-none}"
+        log_debug "Verbose: $VERBOSE"
+        log_debug "Quiet: $QUIET_MODE"
+        log_debug "Trace: $TRACE_MODE"
+        log_debug "Print URL: $PRINT_URL"
+        log_debug "Debug dir: ${DEBUG_DIR:-cwd}"
+        log_debug "Preserve: $PRESERVE_MODE"
 
-    case "$platform" in
-        dropbox)
-            # Fast path: direct download, no Playwright needed.
-            # NOTE: download_dropbox_direct calls `exit` on completion, so when
-            # the user passes multiple URLs and the *first* is a Dropbox link,
-            # the remaining URLs would be silently dropped. Run it in a subshell
-            # for multi-URL invocations so the parent shell survives the exit.
-            if [[ $_giil_url_total -gt 1 ]]; then
-                ( download_dropbox_direct ) || log_warn "Dropbox URL $_giil_url_index failed"
-            else
-                download_dropbox_direct
-            fi
-            # download_dropbox_direct exits, so we never reach here in single-URL mode
-            ;;
-        icloud|gphotos|gdrive|unknown)
-            # Standard path: use Playwright extractor
-            log_step "Checking dependencies..."
-            ensure_node
-            ensure_playwright
+        cd "$GIIL_HOME"
 
-            local script_path
-            script_path=$(create_extractor_script)
+        # A lone Playwright URL keeps the original positional-args invocation
+        # (already a single browser launch) for byte-for-byte back-compat. Set
+        # GIIL_NO_BATCH=1 to force this legacy per-URL path even for many URLs.
+        if [[ ${#_pw_urls[@]} -eq 1 || -n "${GIIL_NO_BATCH:-}" ]]; then
+            for URL in "${_pw_urls[@]}"; do
+                # Per-URL iCloud share -> www normalization (parse_args only did
+                # this for the first URL; do it for each here).
+                if [[ "$URL" =~ share\.icloud\.com/photos/([A-Za-z0-9_+/=-]+) ]]; then
+                    URL="https://www.icloud.com/photos/#${BASH_REMATCH[1]}"
+                fi
+                if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon || log_warn "URL failed: $URL"
+                else
+                    node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" || log_warn "URL failed: $URL"
+                fi
+            done
+        else
+            # Multiple Playwright URLs -> ONE batch run, ONE browser, N tabs.
+            run_playwright_batch _pw_urls
+        fi
+    fi
+}
 
-            if [[ "$ALL_MODE" == "true" ]]; then
-                log_step "Extracting album..."
-            else
-                log_step "Extracting image..."
-            fi
+# Build a JSON jobs array for the URLs in the named array and run extractor.mjs
+# in --batch mode (one launched browser, bounded-concurrency tabs). Shared CLI
+# flags (quality, output, format, etc.) are copied into every job; only the URL
+# varies. Honors GIIL_BATCH_CONCURRENCY (default 3). (#4)
+run_playwright_batch() {
+    local -n _urls_ref="$1"
 
-            log_debug "URL: $URL"
-            log_debug "Output: $OUTPUT_DIR"
-            log_debug "Quality: $QUALITY"
-            log_debug "Timeout: ${TIMEOUT}s"
-            log_debug "Output format: $OUTPUT_FORMAT (source: ${OUTPUT_FORMAT_SOURCE:-default})"
-            log_debug "JSON output: $JSON_OUTPUT"
-            log_debug "All mode: $ALL_MODE"
-            log_debug "Optimize: $OPTIMIZE_MODE"
-            log_debug "Convert: ${CONVERT_FORMAT:-none}"
-            log_debug "Verbose: $VERBOSE"
-            log_debug "Quiet: $QUIET_MODE"
-            log_debug "Trace: $TRACE_MODE"
-            log_debug "Print URL: $PRINT_URL"
-            log_debug "Debug dir: ${DEBUG_DIR:-cwd}"
-            log_debug "Preserve: $PRESERVE_MODE"
+    local concurrency="${GIIL_BATCH_CONCURRENCY:-3}"
+    [[ "$concurrency" =~ ^[0-9]+$ ]] || concurrency=3
+    [[ "$concurrency" -lt 1 ]] && concurrency=1
 
-            cd "$GIIL_HOME"
-            if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
-                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" | encode_json_lines_to_toon || log_warn "URL $_giil_url_index failed"
-            else
-                node "$script_path" "$URL" "$OUTPUT_DIR" "$QUALITY" "$BASE64_OUTPUT" "$DEBUG_MODE" "$TIMEOUT" "$JSON_OUTPUT" "$ALL_MODE" "$OPTIMIZE_MODE" "$CONVERT_FORMAT" "$VERBOSE" "$TRACE_MODE" "$PRINT_URL" "$DEBUG_DIR" "$PRESERVE_MODE" "$QUIET_MODE" || log_warn "URL $_giil_url_index failed"
-            fi
-            ;;
-    esac
+    # jsonOutput must be true for the per-job lines extractor.mjs prints to be
+    # parseable; in TOON mode we ask for json then transcode. In path/base64
+    # mode the extractor still prints the bare path/base64 per job.
+    local jobs_file
+    jobs_file=$(mktemp "${TMPDIR:-/tmp}/giil-jobs.XXXXXX.json")
+
+    # Build the JSON array with a small node helper so URLs are escaped safely
+    # (URLs can contain ", \, #, & etc.). We pass URLs via argv after a marker.
+    local u norm
+    local -a norm_urls=()
+    for u in "${_urls_ref[@]}"; do
+        norm="$u"
+        if [[ "$norm" =~ share\.icloud\.com/photos/([A-Za-z0-9_+/=-]+) ]]; then
+            norm="https://www.icloud.com/photos/#${BASH_REMATCH[1]}"
+        fi
+        norm_urls+=("$norm")
     done
+
+    # Use node itself to emit valid JSON (avoids hand-rolled escaping bugs).
+    GIIL_J_OUTPUT_DIR="$OUTPUT_DIR" \
+    GIIL_J_QUALITY="$QUALITY" \
+    GIIL_J_BASE64="$BASE64_OUTPUT" \
+    GIIL_J_DEBUG="$DEBUG_MODE" \
+    GIIL_J_TIMEOUT="$TIMEOUT" \
+    GIIL_J_JSON="$JSON_OUTPUT" \
+    GIIL_J_ALL="$ALL_MODE" \
+    GIIL_J_OPTIMIZE="$OPTIMIZE_MODE" \
+    GIIL_J_CONVERT="$CONVERT_FORMAT" \
+    GIIL_J_VERBOSE="$VERBOSE" \
+    GIIL_J_TRACE="$TRACE_MODE" \
+    GIIL_J_PRINTURL="$PRINT_URL" \
+    GIIL_J_DEBUGDIR="$DEBUG_DIR" \
+    GIIL_J_PRESERVE="$PRESERVE_MODE" \
+    GIIL_J_QUIET="$QUIET_MODE" \
+    node -e '
+        const e = process.env;
+        const urls = process.argv.slice(1);
+        const tf = (v) => v === "true";
+        const jobs = urls.map((url) => ({
+            url,
+            outputDir: e.GIIL_J_OUTPUT_DIR || ".",
+            quality: e.GIIL_J_QUALITY || "85",
+            base64Output: tf(e.GIIL_J_BASE64),
+            debugMode: tf(e.GIIL_J_DEBUG),
+            timeoutSec: e.GIIL_J_TIMEOUT || "60",
+            jsonOutput: tf(e.GIIL_J_JSON),
+            allMode: tf(e.GIIL_J_ALL),
+            optimizeMode: tf(e.GIIL_J_OPTIMIZE),
+            convertFormat: e.GIIL_J_CONVERT || "",
+            verboseMode: tf(e.GIIL_J_VERBOSE),
+            traceMode: tf(e.GIIL_J_TRACE),
+            printUrlMode: tf(e.GIIL_J_PRINTURL),
+            debugDir: e.GIIL_J_DEBUGDIR || "",
+            preserveMode: tf(e.GIIL_J_PRESERVE),
+            quietMode: tf(e.GIIL_J_QUIET),
+        }));
+        process.stdout.write(JSON.stringify(jobs));
+    ' "${norm_urls[@]}" > "$jobs_file" || {
+        log_error "Failed to build batch jobs file"
+        rm -f "$jobs_file"
+        return 1
+    }
+
+    log_info "Single-browser batch: ${#norm_urls[@]} URLs, concurrency ${concurrency}"
+
+    local rc=0
+    if [[ "$OUTPUT_FORMAT" == "toon" ]]; then
+        node "$script_path" --batch "$jobs_file" "$concurrency" | encode_json_lines_to_toon || rc=$?
+    else
+        node "$script_path" --batch "$jobs_file" "$concurrency" || rc=$?
+    fi
+
+    rm -f "$jobs_file"
+    if [[ $rc -ne 0 ]]; then
+        log_warn "One or more URLs failed in the batch (exit $rc)"
+    fi
+    return 0
 }
 
 main "$@"
